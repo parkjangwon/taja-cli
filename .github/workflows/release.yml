@@ -1,0 +1,125 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Upload — ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS Apple Silicon (arm64)
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_name: taja-cli-macos-arm64.tar.gz
+            binary: taja-cli
+
+          # macOS Intel (x64)
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive_name: taja-cli-macos-x64.tar.gz
+            binary: taja-cli
+
+          # Linux x64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive_name: taja-cli-linux-x64.tar.gz
+            binary: taja-cli
+
+          # Windows x64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_name: taja-cli-windows-x64.zip
+            binary: taja-cli.exe
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux musl 타겟을 위한 musl-tools 설치
+      - name: Install musl-tools (Linux only)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # ── macOS / Linux: tar.gz 압축 ──
+      - name: Archive binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          tar -czf ${{ matrix.archive_name }} \
+            -C target/${{ matrix.target }}/release ${{ matrix.binary }}
+
+      # ── Windows: zip 압축 ──
+      - name: Archive binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.binary }} `
+            -DestinationPath ${{ matrix.archive_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive_name }}
+          path: ${{ matrix.archive_name }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "taja-cli ${{ github.ref_name }}"
+          body: |
+            ## ⌨️ TAJA-CLI ${{ github.ref_name }} 릴리즈
+
+            한국인을 위한 풀스크린 TUI 타자 연습기 **taja-cli**의 새 버전이 배포되었습니다!
+
+            ### 💻 설치 방법
+
+            #### NPM (권장, Node.js 필요)
+            ```bash
+            npm install -g taja-cli
+            taja
+            ```
+
+            #### Cargo (Rust 필요)
+            ```bash
+            cargo install taja-cli
+            ```
+
+            #### 수동 설치
+            아래 Assets에서 사용 중인 플랫폼에 맞는 파일을 받아 압축 해제 후 실행하세요.
+            - `taja-cli-macos-arm64.tar.gz` — macOS Apple Silicon (M1/M2/M3)
+            - `taja-cli-macos-x64.tar.gz` — macOS Intel
+            - `taja-cli-linux-x64.tar.gz` — Linux x64
+            - `taja-cli-windows-x64.zip` — Windows x64
+
+          files: |
+            taja-cli-macos-arm64.tar.gz
+            taja-cli-macos-x64.tar.gz
+            taja-cli-linux-x64.tar.gz
+            taja-cli-windows-x64.zip
+          draft: false
+          prerelease: false

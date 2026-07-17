@@ -41,20 +41,30 @@
 ## 🚀 설치 및 실행 방법
 
 ### 요구 사항
-* [Rust & Cargo](https://rustup.rs/) (최신 Stable 버전 권장)
-* 터미널 에뮬레이터 (macOS Terminal, iTerm2, Alacritty 등)
+* **NPM 방식 (권장)**: [Node.js](https://nodejs.org/) (버전 12 이상)
+* **Cargo 방식**: [Rust & Cargo](https://rustup.rs/)
+* 공통: 터미널 에뮬레이터 (macOS Terminal, iTerm2, Alacritty, Windows Terminal 등)
 
-### 실행 방법
-1. 저장소를 클론합니다.
+### 1. NPM으로 설치 (가장 간편)
+터미널에서 아래 명령어로 즉시 전역 설치 및 실행할 수 있습니다:
+```bash
+npm install -g taja-cli
+taja
+```
+
+### 2. Cargo로 빌드 및 실행 (소스코드 빌드)
+1. 저장소를 클론합니다:
    ```bash
-   git clone https://github.com/<your-username>/taja-cli.git
+   git clone https://github.com/parkjangwon/taja-cli.git
    cd taja-cli
    ```
-2. OS 입력기 상태를 **영문(QWERTY)**으로 전환합니다. (내장 한글 오토마타 작동을 위해 필수)
-3. Cargo 명령어로 빌드 및 실행합니다.
+2. Cargo 명령어로 실행합니다:
    ```bash
    cargo run --release
    ```
+
+> [!IMPORTANT]
+> 타자 연습을 시작하기 전에 **OS 입력기 상태를 반드시 '영문(QWERTY)'**으로 전환해 주세요. (내장 한글 오토마타 엔진이 키 입력을 자모로 변환하여 작동합니다.)
 
 ---
 

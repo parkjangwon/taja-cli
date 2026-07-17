@@ -181,20 +181,61 @@ impl App {
         }
     }
 
-    /// 게임 모드 공통: 키 입력 + 자모 접두사 기반 오타 판정
+    /// 공통 입력: 자모 접두사 기반 오타 판정.
+    /// 유효→무효로 바뀌는 순간에만 오타 1회 기록 (연타 시 정확도 급락 방지).
     pub fn push_game_char(&mut self, c: char) {
+        let before = self.input_automata.get_text();
+        let was_valid = before.is_empty()
+            || crate::hangeul::is_input_prefix_of(&before, &self.target_text);
+
         let idx = self.input_automata.expected_char_index();
         let expected_char = self.target_text.chars().nth(idx);
         self.input_automata.push_char(c, expected_char);
+
         let typed = self.input_automata.get_text();
-        if !crate::hangeul::is_input_prefix_of(&typed, &self.target_text) {
+        let now_valid = crate::hangeul::is_input_prefix_of(&typed, &self.target_text);
+        if was_valid && !now_valid {
             self.record_error(expected_char.unwrap_or(c), c);
         }
+    }
+
+    /// 다음 타깃으로 넘어가되 타이머·오타 통계는 유지 (연속 연습 세션용)
+    pub fn advance_practice_target(&mut self, target: String) {
+        self.accumulated_strokes += self.input_automata.get_strokes();
+        self.target_text = target;
+        self.input_automata.clear();
+        self.update_automata_modes();
     }
 
     /// 목표 텍스트를 정확히 모두 입력했는지 (자모 완전 일치)
     pub fn is_target_fully_typed(&self) -> bool {
         crate::hangeul::is_input_exact_match(&self.input_automata.get_text(), &self.target_text)
+    }
+
+    /// 게임 중 지울 입력이 있는지 (Esc로 초기화 가능 여부)
+    pub fn has_pending_game_input(&self) -> bool {
+        !self.input_automata.get_text().is_empty() || self.rain_active_idx.is_some()
+    }
+
+    /// 게임 모드 현재 입력 초기화 (Esc). 타자 레인이면 활성 단어도 해제.
+    /// 목표 단어/문단 자체는 유지한다 (레인 제외).
+    pub fn clear_game_input(&mut self) {
+        let is_rain = matches!(self.active_screen, ActiveScreen::TypingRain { .. });
+        self.input_automata.clear();
+
+        if is_rain {
+            if let Some(idx) = self.rain_active_idx {
+                if let Some(word) = self.rain_words.get_mut(idx) {
+                    word.active = false;
+                    word.typed_len = 0;
+                }
+            }
+            self.rain_active_idx = None;
+            self.target_text.clear();
+        } else {
+            // clear()가 english_mode 등을 리셋하므로 현재 타깃 기준으로 복구
+            self.update_automata_modes();
+        }
     }
 
     /// 현재 target_text 에 따라 오토마타의 모드(raw_jamo_mode, english_mode)를 갱신
@@ -241,9 +282,22 @@ impl App {
         }
     }
 
-    /// 경과 시간 갱신
+    /// 타이머가 아직 돌아가는 중인지
+    pub fn is_timer_running(&self) -> bool {
+        self.start_time.is_some()
+    }
+
+    /// 경과 시간 갱신 (타이머가 돌아가는 중에만 반영)
     pub fn update_elapsed_time(&mut self) {
         if let Some(start) = self.start_time {
+            self.elapsed_time = start.elapsed();
+        }
+    }
+
+    /// 타이머 정지: 최종 경과를 고정하고 start_time을 제거해 이후 갱신을 막는다.
+    /// 세션/게임 종료·중단 시 반드시 호출한다.
+    pub fn stop_timer(&mut self) {
+        if let Some(start) = self.start_time.take() {
             self.elapsed_time = start.elapsed();
         }
     }
@@ -284,7 +338,7 @@ impl App {
 
     /// 연습 세션 종료 후 기록 저장
     pub fn save_session_record(&mut self, mode_name: &str, lang_name: &str) {
-        // 기록 생성
+        self.update_elapsed_time();
         let date_str = chrono::Local::now().to_rfc3339();
         let record = PracticeRecord {
             date: date_str,
@@ -295,8 +349,10 @@ impl App {
             duration_secs: self.elapsed_time.as_secs(),
             wrong_keys: self.wrong_keys_map.clone(),
         };
-        
-        let _ = self.storage.add_record(record);
+
+        if let Err(e) = self.storage.add_record(record) {
+            eprintln!("[taja-cli] 기록 저장 실패: {}", e);
+        }
     }
 
     // --- 자리 연습 데이터 정의 ---
@@ -998,7 +1054,8 @@ impl App {
                 ActiveScreen::Survival { is_korean } => is_korean,
                 _ => true,
             };
-            let min_len = 2 + (self.game_mode_round / 10);
+            // 한글 단어 풀 길이가 짧아 min_len 상한을 둔다
+            let min_len = std::cmp::min(4, 2 + (self.game_mode_round / 10));
             let mut more = Self::get_game_words_by_difficulty(is_korean, min_len);
             self.word_list.append(&mut more);
         }
@@ -1088,6 +1145,7 @@ impl App {
             self.rain_words[i].destroyed = true;
             self.game_mode_lives = self.game_mode_lives.saturating_sub(1);
             self.game_mode_combo = 0;
+            self.game_words_total += 1; // 실패 시도도 total에 반영
             // 활성 단어가 바닥에 닿으면 활성 해제
             if self.rain_active_idx == Some(i) {
                 self.rain_active_idx = None;
@@ -1095,6 +1153,9 @@ impl App {
                 self.target_text.clear();
             }
         }
+
+        // destroyed 단어 제거 (인덱스 재정렬)
+        self.prune_destroyed_rain_words();
 
         // 스폰 카운터
         self.rain_spawn_counter += 1;
@@ -1133,6 +1194,12 @@ impl App {
         } else {
             false
         }
+    }
+
+    /// destroyed 레인 단어를 제거하고 active 인덱스를 재계산
+    pub fn prune_destroyed_rain_words(&mut self) {
+        self.rain_words.retain(|w| !w.destroyed);
+        self.rain_active_idx = self.rain_words.iter().position(|w| w.active);
     }
 
     // ════════════════════════════════════════════════════════
@@ -1337,7 +1404,7 @@ impl App {
 
         if self.current_word_idx >= self.word_list.len() {
             // 데일리 챌린지 완료
-            self.update_elapsed_time();
+            self.stop_timer();
             let cpm = self.get_cpm();
             let acc = self.get_accuracy();
             self.game_mode_score = ((cpm as f64) * (acc / 100.0)) as usize;
@@ -1432,7 +1499,9 @@ I shall be telling this with a sigh somewhere ages and ages hence: Two roads div
 
         self.long_text_paragraphs = raw_text.lines().map(|s| s.to_string()).collect();
         self.long_text_current_para_idx = 0;
-        
+        self.game_words_total = self.long_text_paragraphs.len();
+        self.game_words_correct = 0;
+
         let first_para = self.long_text_paragraphs[0].clone();
         self.start_practice_session(first_para);
         self.start_time = Some(Instant::now());
@@ -1451,14 +1520,20 @@ I shall be telling this with a sigh somewhere ages and ages hence: Two roads div
             self.total_errors += exp_len - typ_len;
         }
 
+        // 문단 진행도를 결과 화면 통계에 재사용
+        self.game_words_correct = self.long_text_current_para_idx + 1;
+        self.game_words_total = self.long_text_paragraphs.len();
+
         self.long_text_current_para_idx += 1;
         if self.long_text_current_para_idx >= self.long_text_paragraphs.len() {
             // 모든 문단 타이핑 완료
-            self.update_elapsed_time();
+            self.stop_timer();
             let cpm = self.get_cpm();
             let acc = self.get_accuracy();
             // 완주 스코어 계산
             self.game_mode_score = ((cpm as f64) * (acc / 100.0)) as usize;
+            self.game_words_correct = self.long_text_paragraphs.len();
+            self.game_words_total = self.long_text_paragraphs.len();
             return false;
         }
 

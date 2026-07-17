@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const https = require('https');
 
 // 버전 정보 (Github Releases 태그와 매핑)
-const VERSION = '0.1.0';
+const VERSION = '0.1.1';
 const REPO = 'parkjangwon/taja-cli';
 
 // 플랫폼 매핑
@@ -14,6 +14,7 @@ const PLATFORMS = {
   'darwin-arm64': 'taja-cli-macos-arm64.tar.gz',
   'darwin-x64': 'taja-cli-macos-x64.tar.gz',
   'linux-x64': 'taja-cli-linux-x64.tar.gz',
+  'linux-arm64': 'taja-cli-linux-arm64.tar.gz',
   'win32-x64': 'taja-cli-windows-x64.zip'
 };
 

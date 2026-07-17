@@ -148,6 +148,7 @@ fn run_app<B: ratatui::backend::Backend>(
                             match key.code {
                                 KeyCode::Esc => {
                                     // 자리 연습 중단, 메뉴로 백
+                                    app.stop_timer();
                                     app.active_screen = ActiveScreen::FingerPracticeLevelMenu { is_korean };
                                     app.menu_selected_idx = level - 1;
                                 }
@@ -155,41 +156,23 @@ fn run_app<B: ratatui::backend::Backend>(
                                     app.input_automata.backspace();
                                 }
                                 KeyCode::Char(c) => {
-                                    let current_pos = app.input_automata.get_text().chars().count();
-                                    let expected_chars: Vec<char> = app.target_text.chars().collect();
-                                    let expected_char = expected_chars.get(current_pos).copied();
-                                    
-                                    if current_pos < expected_chars.len() {
-                                        let ec = expected_char.unwrap();
-                                        
-                                        // 입력 처리
-                                        app.input_automata.push_char(c, expected_char);
-                                        
-                                        // 정오 판정
-                                        let typed_text = app.input_automata.get_text();
-                                        if let Some(new_typed_char) = typed_text.chars().nth(current_pos) {
-                                            if !hangeul::is_typing_valid(new_typed_char, ec) {
-                                                app.record_error(ec, c);
-                                            }
-                                        }
-                                    }
-                                    
-                                    // 입력 완료 확인
-                                    let typed_text = app.input_automata.get_text();
-                                    let completed_len = hangeul::count_completed_chars(&typed_text, &app.target_text);
-                                    let expected_len = app.target_text.chars().count();
-                                    
-                                    if completed_len >= expected_len {
-                                        // 자리 연습은 바로 기록 저장
+                                    app.push_game_char(c);
+
+                                    // 정확히 입력했을 때만 다음 세트로 (오타 통과 방지)
+                                    if app.is_target_fully_typed() {
                                         app.input_automata.commit_current();
                                         app.update_elapsed_time();
-                                        
+
                                         let lang_str = if is_korean { "한글" } else { "영어" };
-                                        app.save_session_record("자리연습", &format!("{} Level {}", lang_str, level));
-                                        
-                                        // 바로 다음 문장 세트 생성해서 계속 진행
-                                        let next_target = App::get_finger_practice_target(level, is_korean);
-                                        app.start_practice_session(next_target);
+                                        app.save_session_record(
+                                            "자리연습",
+                                            &format!("{} Level {}", lang_str, level),
+                                        );
+
+                                        // 타이머·누적 통계 유지한 채 다음 타깃
+                                        let next_target =
+                                            App::get_finger_practice_target(level, is_korean);
+                                        app.advance_practice_target(next_target);
                                     }
                                 }
                                 _ => {}
@@ -222,6 +205,7 @@ fn run_app<B: ratatui::backend::Backend>(
                             
                             match key.code {
                                 KeyCode::Esc => {
+                                    app.stop_timer();
                                     app.active_screen = ActiveScreen::WordPracticeMenu;
                                     app.menu_selected_idx = if is_korean { 0 } else { 1 };
                                 }
@@ -231,43 +215,32 @@ fn run_app<B: ratatui::backend::Backend>(
                                 // 단어 단위 완료는 Space 또는 Enter
                                 KeyCode::Char(' ') | KeyCode::Enter => {
                                     app.input_automata.commit_current();
-                                    let typed = app.input_automata.get_text();
-                                    
-                                    // 단어별 오타 검사
-                                    let expected = &app.target_text;
-                                    if typed.trim() != expected.trim() {
-                                        // 단어가 통째로 틀렸다면 마지막 글자를 오타로 기록
-                                        let last_exp = expected.chars().last().unwrap_or(' ');
-                                        let last_typ = typed.chars().last().unwrap_or(' ');
-                                        app.record_error(last_exp, last_typ);
+                                    if !app.is_target_fully_typed() {
+                                        // 틀린/미완성 제출: 마지막 기대 글자 기준 오타 1회
+                                        if let Some(last_exp) = app.target_text.chars().last() {
+                                            let last_typ = app
+                                                .input_automata
+                                                .get_text()
+                                                .chars()
+                                                .last()
+                                                .unwrap_or(' ');
+                                            app.record_error(last_exp, last_typ);
+                                        }
                                     }
-                                    
-                                    // 다음 단어로 전환
+
                                     let has_next = app.next_word();
                                     if !has_next {
-                                        // 낱말 연습 전체 완료 -> 저장
-                                        app.update_elapsed_time();
-                                        app.save_session_record("낱말연습", if is_korean { "한글" } else { "영어" });
+                                        app.stop_timer();
+                                        app.save_session_record(
+                                            "낱말연습",
+                                            if is_korean { "한글" } else { "영어" },
+                                        );
                                         app.active_screen = ActiveScreen::WordPracticeMenu;
                                         app.menu_selected_idx = if is_korean { 0 } else { 1 };
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    let current_pos = app.input_automata.get_text().chars().count();
-                                    let expected_chars: Vec<char> = app.target_text.chars().collect();
-                                    let expected_char = expected_chars.get(current_pos).copied();
-                                    
-                                    app.input_automata.push_char(c, expected_char);
-                                    
-                                    // 실시간 오타 판정 (낱말 내 자모 비교)
-                                    if let Some(ec) = expected_char {
-                                        let typed_text = app.input_automata.get_text();
-                                        if let Some(new_typed_char) = typed_text.chars().nth(current_pos) {
-                                            if !hangeul::is_typing_valid(new_typed_char, ec) {
-                                                app.record_error(ec, c);
-                                            }
-                                        }
-                                    }
+                                    app.push_game_char(c);
                                 }
                                 _ => {}
                             }
@@ -299,6 +272,7 @@ fn run_app<B: ratatui::backend::Backend>(
                             
                             match key.code {
                                 KeyCode::Esc => {
+                                    app.stop_timer();
                                     app.active_screen = ActiveScreen::SentencePracticeMenu;
                                     app.menu_selected_idx = if is_korean { 0 } else { 1 };
                                 }
@@ -321,28 +295,14 @@ fn run_app<B: ratatui::backend::Backend>(
                                     let has_next = app.next_sentence();
                                     if !has_next {
                                         // 문장 연습 전체 완료 -> 저장
-                                        app.update_elapsed_time();
+                                        app.stop_timer();
                                         app.save_session_record("문장연습", if is_korean { "한글" } else { "영어" });
                                         app.active_screen = ActiveScreen::SentencePracticeMenu;
                                         app.menu_selected_idx = if is_korean { 0 } else { 1 };
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    let current_pos = app.input_automata.get_text().chars().count();
-                                    let expected_chars: Vec<char> = app.target_text.chars().collect();
-                                    let expected_char = expected_chars.get(current_pos).copied();
-                                    
-                                    app.input_automata.push_char(c, expected_char);
-                                    
-                                    // 실시간 오타 판정
-                                    if let Some(ec) = expected_char {
-                                        let typed_text = app.input_automata.get_text();
-                                        if let Some(new_typed_char) = typed_text.chars().nth(current_pos) {
-                                            if !hangeul::is_typing_valid(new_typed_char, ec) {
-                                                app.record_error(ec, c);
-                                            }
-                                        }
-                                    }
+                                    app.push_game_char(c);
                                 }
                                 _ => {}
                             }
@@ -475,14 +435,19 @@ fn run_app<B: ratatui::backend::Backend>(
                         ActiveScreen::TimeAttack { is_korean } => {
                             // 시간 초과 체크
                             if app.is_time_attack_expired() {
-                                app.update_elapsed_time();
+                                app.stop_timer();
                                 app.save_session_record("게임-시간제한", if is_korean { "한글" } else { "영어" });
                                 app.active_screen = ActiveScreen::GameOver { game_type: GameType::TimeAttack, is_korean };
                             } else {
                                 match key.code {
                                     KeyCode::Esc => {
-                                        app.active_screen = ActiveScreen::GameModeMenu;
-                                        app.menu_selected_idx = 0;
+                                        if app.has_pending_game_input() {
+                                            app.clear_game_input();
+                                        } else {
+                                            app.stop_timer();
+                                            app.active_screen = ActiveScreen::GameModeMenu;
+                                            app.menu_selected_idx = 0;
+                                        }
                                     }
                                     KeyCode::Backspace => {
                                         app.input_automata.backspace();
@@ -508,8 +473,13 @@ fn run_app<B: ratatui::backend::Backend>(
                         ActiveScreen::Survival { is_korean } => {
                             match key.code {
                                 KeyCode::Esc => {
-                                    app.active_screen = ActiveScreen::GameModeMenu;
-                                    app.menu_selected_idx = 1;
+                                    if app.has_pending_game_input() {
+                                        app.clear_game_input();
+                                    } else {
+                                        app.stop_timer();
+                                        app.active_screen = ActiveScreen::GameModeMenu;
+                                        app.menu_selected_idx = 1;
+                                    }
                                 }
                                 KeyCode::Backspace => {
                                     app.input_automata.backspace();
@@ -518,7 +488,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                     let had_error = !app.is_current_word_success();
                                     let has_next = app.survival_next_word(had_error);
                                     if !has_next {
-                                        app.update_elapsed_time();
+                                        app.stop_timer();
                                         app.save_session_record("게임-서바이벌", if is_korean { "한글" } else { "영어" });
                                         app.active_screen = ActiveScreen::GameOver { game_type: GameType::Survival, is_korean };
                                     }
@@ -530,7 +500,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                         let had_error = !app.is_current_word_success();
                                         let has_next = app.survival_next_word(had_error);
                                         if !has_next {
-                                            app.update_elapsed_time();
+                                            app.stop_timer();
                                             app.save_session_record("게임-서바이벌", if is_korean { "한글" } else { "영어" });
                                             app.active_screen = ActiveScreen::GameOver { game_type: GameType::Survival, is_korean };
                                         }
@@ -543,14 +513,19 @@ fn run_app<B: ratatui::backend::Backend>(
                         // ── 타자 레인 모드 ──
                         ActiveScreen::TypingRain { is_korean } => {
                             if app.game_mode_lives == 0 {
-                                app.update_elapsed_time();
+                                app.stop_timer();
                                 app.save_session_record("게임-타자레인", if is_korean { "한글" } else { "영어" });
                                 app.active_screen = ActiveScreen::GameOver { game_type: GameType::TypingRain, is_korean };
                             } else {
                                 match key.code {
                                     KeyCode::Esc => {
-                                        app.active_screen = ActiveScreen::GameModeMenu;
-                                        app.menu_selected_idx = 2;
+                                        if app.has_pending_game_input() {
+                                            app.clear_game_input();
+                                        } else {
+                                            app.stop_timer();
+                                            app.active_screen = ActiveScreen::GameModeMenu;
+                                            app.menu_selected_idx = 2;
+                                        }
                                     }
                                     KeyCode::Backspace => {
                                         if app.rain_active_idx.is_some() {
@@ -558,12 +533,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                             app.update_rain_typed_progress();
                                             // 입력이 비면 타겟 선택 해제
                                             if app.input_automata.get_text().is_empty() {
-                                                if let Some(idx) = app.rain_active_idx {
-                                                    app.rain_words[idx].active = false;
-                                                    app.rain_words[idx].typed_len = 0;
-                                                }
-                                                app.rain_active_idx = None;
-                                                app.target_text.clear();
+                                                app.clear_game_input();
                                             }
                                         }
                                     }
@@ -622,6 +592,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                                 app.accumulated_strokes += app.input_automata.get_strokes();
                                                 app.input_automata.clear();
                                                 app.target_text.clear();
+                                                app.prune_destroyed_rain_words();
                                             }
                                         }
                                     }
@@ -634,15 +605,20 @@ fn run_app<B: ratatui::backend::Backend>(
                         ActiveScreen::FlashTyping { is_korean } => {
                             match key.code {
                                 KeyCode::Esc => {
-                                    app.active_screen = ActiveScreen::GameModeMenu;
-                                    app.menu_selected_idx = 3;
+                                    if app.has_pending_game_input() && !app.flash_answer_shown {
+                                        app.clear_game_input();
+                                    } else {
+                                        app.stop_timer();
+                                        app.active_screen = ActiveScreen::GameModeMenu;
+                                        app.menu_selected_idx = 3;
+                                    }
                                 }
                                 KeyCode::Enter => {
                                     if app.flash_answer_shown {
                                         // 다음 라운드로
                                         let has_next = app.flash_next_round();
                                         if !has_next {
-                                            app.update_elapsed_time();
+                                            app.stop_timer();
                                             app.save_session_record("게임-플래시타이핑", if is_korean { "한글" } else { "영어" });
                                             app.active_screen = ActiveScreen::GameOver { game_type: GameType::FlashTyping, is_korean };
                                         }
@@ -677,8 +653,13 @@ fn run_app<B: ratatui::backend::Backend>(
                         ActiveScreen::DailyChallenge { is_korean } => {
                             match key.code {
                                 KeyCode::Esc => {
-                                    app.active_screen = ActiveScreen::GameModeMenu;
-                                    app.menu_selected_idx = 4;
+                                    if app.has_pending_game_input() {
+                                        app.clear_game_input();
+                                    } else {
+                                        app.stop_timer();
+                                        app.active_screen = ActiveScreen::GameModeMenu;
+                                        app.menu_selected_idx = 4;
+                                    }
                                 }
                                 KeyCode::Backspace => {
                                     app.input_automata.backspace();
@@ -687,7 +668,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                     app.input_automata.commit_current();
                                     let has_next = app.daily_next_word();
                                     if !has_next {
-                                        app.update_elapsed_time();
+                                        app.stop_timer();
                                         app.save_session_record("게임-데일리챌린지", if is_korean { "한글" } else { "영어" });
                                         app.active_screen = ActiveScreen::GameOver { game_type: GameType::DailyChallenge, is_korean };
                                     }
@@ -698,7 +679,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                         app.input_automata.commit_current();
                                         let has_next = app.daily_next_word();
                                         if !has_next {
-                                            app.update_elapsed_time();
+                                            app.stop_timer();
                                             app.save_session_record("게임-데일리챌린지", if is_korean { "한글" } else { "영어" });
                                             app.active_screen = ActiveScreen::GameOver { game_type: GameType::DailyChallenge, is_korean };
                                         }
@@ -739,19 +720,33 @@ fn run_app<B: ratatui::backend::Backend>(
 
                             match key.code {
                                 KeyCode::Esc => {
-                                    app.active_screen = ActiveScreen::LongTextRaceMenu { is_korean };
-                                    app.menu_selected_idx = text_idx;
+                                    if app.has_pending_game_input() {
+                                        app.clear_game_input();
+                                    } else {
+                                        app.stop_timer();
+                                        app.active_screen = ActiveScreen::LongTextRaceMenu { is_korean };
+                                        app.menu_selected_idx = text_idx;
+                                    }
                                 }
                                 KeyCode::Backspace => {
                                     app.input_automata.backspace();
                                 }
                                 KeyCode::Enter => {
+                                    // 정확히 입력한 줄만 다음으로 (미완성 스킵 방지)
                                     app.input_automata.commit_current();
-                                    let has_next = app.long_text_next_paragraph();
-                                    if !has_next {
-                                        app.update_elapsed_time();
-                                        app.save_session_record("게임-긴글레이스", if is_korean { "한글" } else { "영어" });
-                                        app.active_screen = ActiveScreen::GameOver { game_type: GameType::LongTextRace, is_korean };
+                                    if app.is_target_fully_typed() {
+                                        let has_next = app.long_text_next_paragraph();
+                                        if !has_next {
+                                            app.stop_timer();
+                                            app.save_session_record(
+                                                "게임-긴글레이스",
+                                                if is_korean { "한글" } else { "영어" },
+                                            );
+                                            app.active_screen = ActiveScreen::GameOver {
+                                                game_type: GameType::LongTextRace,
+                                                is_korean,
+                                            };
+                                        }
                                     }
                                 }
                                 KeyCode::Char(c) => {
@@ -761,9 +756,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                         app.input_automata.commit_current();
                                         let has_next = app.long_text_next_paragraph();
                                         if !has_next {
-                                            app.update_elapsed_time();
-                                            app.save_session_record("게임-긴글레이스", if is_korean { "한글" } else { "영어" });
-                                            app.active_screen = ActiveScreen::GameOver { game_type: GameType::LongTextRace, is_korean };
+                                            app.stop_timer();
+                                            app.save_session_record(
+                                                "게임-긴글레이스",
+                                                if is_korean { "한글" } else { "영어" },
+                                            );
+                                            app.active_screen = ActiveScreen::GameOver {
+                                                game_type: GameType::LongTextRace,
+                                                is_korean,
+                                            };
                                         }
                                     }
                                 }
@@ -824,14 +825,16 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
         
-        // 실시간 타이머 흐름 업데이트
-        app.update_elapsed_time();
+        // 활성 세션일 때만 실시간 경과 갱신 (종료 화면에서 계속 흐르는 버그 방지)
+        if app.is_timer_running() {
+            app.update_elapsed_time();
+        }
 
         // 게임 모드별 틱 처리
         match app.active_screen {
             ActiveScreen::TimeAttack { is_korean } => {
                 if app.is_time_attack_expired() {
-                    app.update_elapsed_time();
+                    app.stop_timer();
                     app.save_session_record("게임-시간제한", if is_korean { "한글" } else { "영어" });
                     app.active_screen = ActiveScreen::GameOver { game_type: GameType::TimeAttack, is_korean };
                 }
@@ -841,7 +844,7 @@ fn run_app<B: ratatui::backend::Backend>(
                 app.rain_screen_height = terminal.size()?.height.saturating_sub(10);
                 app.tick_rain();
                 if app.game_mode_lives == 0 {
-                    app.update_elapsed_time();
+                    app.stop_timer();
                     app.save_session_record("게임-타자레인", if is_korean { "한글" } else { "영어" });
                     app.active_screen = ActiveScreen::GameOver { game_type: GameType::TypingRain, is_korean };
                 }

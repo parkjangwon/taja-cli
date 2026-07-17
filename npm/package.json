@@ -1,6 +1,6 @@
 {
   "name": "taja-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A modern fullscreen Korean/English TUI typing practice game with built-in Hangul automata",
   "main": "bin/index.js",
   "bin": {

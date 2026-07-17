@@ -54,7 +54,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, chunks[2], app);
 }
 
-/// 게임 모드용: 자모 접두사 기반 정오 하이라이트 Span 생성
+/// 자모 접두사 기반 정오 하이라이트 Span 생성 (연습/게임 공용)
 fn game_typed_spans(typed: &str, target: &str) -> Vec<Span<'static>> {
     let prefix_ok = hangeul::is_input_prefix_of(typed, target);
     let matched = hangeul::fully_matched_chars(typed, target);
@@ -67,12 +67,13 @@ fn game_typed_spans(typed: &str, target: &str) -> Vec<Span<'static>> {
                 target_char.to_string(),
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             ));
-        } else if prefix_ok && i == matched && typed_char_count > matched {
+        } else if prefix_ok && i == matched {
+            // 조합 중이거나 다음에 칠 글자 (커서)
             text_spans.push(Span::styled(
                 target_char.to_string(),
                 Style::default()
-                    .fg(Color::Yellow)
-                    .bg(Color::DarkGray)
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ));
         } else if !prefix_ok && i < typed_char_count {
@@ -85,7 +86,7 @@ fn game_typed_spans(typed: &str, target: &str) -> Vec<Span<'static>> {
         } else {
             text_spans.push(Span::styled(
                 target_char.to_string(),
-                Style::default().fg(Color::White),
+                Style::default().fg(Color::DarkGray),
             ));
         }
     }
@@ -105,7 +106,7 @@ fn draw_header(f: &mut Frame, area: Rect) {
     );
 
     let info = Span::styled(
-        " v0.1.0 ",
+        " v0.1.1 ",
         Style::default().fg(Color::DarkGray),
     );
 
@@ -144,19 +145,19 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             " [↑/↓]: 이동  [Enter]: 선택  [Esc]: 이전 화면 "
         }
         ActiveScreen::TimeAttack { .. } | ActiveScreen::Survival { .. } | ActiveScreen::DailyChallenge { .. } => {
-            " [Esc]: 게임 중단  [Space/Enter]: 단어 제출 "
+            " [Esc]: 입력 초기화 (비어 있으면 중단)  [Space/Enter]: 단어 제출 "
         }
         ActiveScreen::TypingRain { .. } => {
-            " [Esc]: 게임 중단  타이핑으로 단어 파괴! "
+            " [Esc]: 입력 초기화 (비어 있으면 중단)  타이핑으로 단어 파괴! "
         }
         ActiveScreen::FlashTyping { .. } => {
-            " [Esc]: 게임 중단  [Enter]: 정답 제출 / 다음 라운드 "
+            " [Esc]: 입력 초기화 (비어 있으면 중단)  [Enter]: 정답 제출 / 다음 라운드 "
         }
         ActiveScreen::LongTextRaceMenu { .. } => {
             " [↑/↓]: 이동  [Enter]: 선택  [Esc]: 이전 화면 "
         }
         ActiveScreen::LongTextRace { .. } => {
-            " [Esc]: 게임 중단  [Enter]: 다음 줄로 (문단 전환)  [아무 키나 입력해 시작] "
+            " [Esc]: 입력 초기화 (비어 있으면 중단)  [Enter]: 정확히 입력한 줄만 다음으로 "
         }
         ActiveScreen::GameOver { .. } => {
             " [Enter]: 다시 하기  [Esc]: 게임 모드 메뉴로 "
@@ -501,39 +502,7 @@ fn draw_finger_practice(f: &mut Frame, area: Rect, app: &App, level: usize, is_k
 
     let typed = app.input_automata.get_text();
     let expected = &app.target_text;
-
-    // 타자 정오 대조 Span 빌드
-    let mut text_spans = Vec::new();
-    for (i, target_char) in expected.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        
-        match typed_char_opt {
-            Some(tc) => {
-                if hangeul::is_typing_valid(tc, target_char) {
-                    // 맞았으면 녹색
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green)));
-                } else {
-                    // 틀렸으면 빨간색에 밑줄
-                    text_spans.push(Span::styled(
-                        target_char.to_string(),
-                        Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED),
-                    ));
-                }
-            }
-            None => {
-                // 아직 입력하지 않은 글자
-                if i == typed.chars().count() {
-                    // 현재 입력 포커스 위치 (깜빡이 효과 대신 검은색 배경에 노란 글씨)
-                    text_spans.push(Span::styled(
-                        target_char.to_string(),
-                        Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
-                    ));
-                } else {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::DarkGray)));
-                }
-            }
-        }
-    }
+    let text_spans = game_typed_spans(&typed, expected);
 
     let mut lines = Vec::new();
     lines.push(Line::from(""));
@@ -547,36 +516,8 @@ fn draw_finger_practice(f: &mut Frame, area: Rect, app: &App, level: usize, is_k
 
     f.render_widget(info_p, main_layout[0]);
 
-    // 2. 하단 키보드 위젯 렌더링
-    // 다음에 입력해야 하는 타깃 자모 찾기
-    let current_pos = typed.chars().count();
-    let next_target_char = expected.chars().nth(current_pos);
-    
-    // 타깃 글자가 완성형 한글인 경우, 조합 상태에 맞추어 실제 입력해야 할 다음 자모 추출
-    let actual_target_char = match next_target_char {
-        Some(c) => {
-            let code = c as u32;
-            if (0xAC00..=0xD7A3).contains(&code) {
-                let target_jamos = hangeul::fully_decompose_hangul(c);
-                let current_composed_char = app.input_automata.get_current_char();
-                let current_jamos = match current_composed_char {
-                    Some(cc) => hangeul::fully_decompose_hangul(cc),
-                    None => Vec::new(),
-                };
-                
-                let next_jamo_idx = current_jamos.len();
-                if next_jamo_idx < target_jamos.len() {
-                    Some(target_jamos[next_jamo_idx])
-                } else {
-                    Some(c)
-                }
-            } else {
-                Some(c)
-            }
-        }
-        None => None,
-    };
-    
+    // 2. 하단 키보드 위젯 — 전체 문자열 자모 시퀀스 기준 다음 키
+    let actual_target_char = hangeul::next_input_unit(&typed, expected);
     let keyboard_widget = KeyboardWidget::new(actual_target_char, is_korean);
     f.render_widget(keyboard_widget, main_layout[1]);
 }
@@ -607,27 +548,7 @@ fn draw_word_practice(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
     };
 
     let typed = app.input_automata.get_text();
-
-    // 단어 정오 렌더링
-    let mut text_spans = Vec::new();
-    for (i, target_char) in current_word.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        match typed_char_opt {
-            Some(tc) => {
-                if tc == target_char {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
-                } else {
-                    text_spans.push(Span::styled(
-                        target_char.to_string(),
-                        Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED),
-                    ));
-                }
-            }
-            None => {
-                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
-            }
-        }
-    }
+    let text_spans = game_typed_spans(&typed, current_word);
 
     // 개발자 이스터에그 단어 강조 (재미용)
     let is_easter_egg = !is_korean && vec![
@@ -650,21 +571,20 @@ fn draw_word_practice(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
     // 목표 단어 출력
     lines.push(Line::from(vec![
         Span::styled(" 제시 단어: ", Style::default().fg(Color::Gray)),
-        Span::styled(current_word, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(current_word.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
     ]));
     
-    // 입력 중인 단어 출력
-    lines.push(Line::from(vec![
-        Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray)),
-        Span::styled(typed, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-    ]));
+    // 입력 중인 단어 출력 (정오 하이라이트)
+    let mut input_line = vec![Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray))];
+    input_line.extend(text_spans);
+    lines.push(Line::from(input_line));
     
     lines.push(Line::from(""));
     
     // 다음 단어 힌트
     lines.push(Line::from(vec![
         Span::styled(" 다음 단어: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(next_word, Style::default().fg(Color::DarkGray)),
+        Span::styled(next_word.to_string(), Style::default().fg(Color::DarkGray)),
         Span::styled(format!("  ({} / {})", app.current_word_idx + 1, app.word_list.len()), Style::default().fg(Color::Magenta)),
     ]));
     
@@ -697,34 +617,7 @@ fn draw_sentence_practice(f: &mut Frame, area: Rect, app: &App, is_korean: bool)
 
     let current_sentence = &app.target_text;
     let typed = app.input_automata.get_text();
-
-    // 문장 정오 렌더링
-    let mut text_spans = Vec::new();
-    for (i, target_char) in current_sentence.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        match typed_char_opt {
-            Some(tc) => {
-                if tc == target_char {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green)));
-                } else {
-                    text_spans.push(Span::styled(
-                        target_char.to_string(),
-                        Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED),
-                    ));
-                }
-            }
-            None => {
-                if i == typed.chars().count() {
-                    text_spans.push(Span::styled(
-                        target_char.to_string(),
-                        Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD),
-                    ));
-                } else {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
-                }
-            }
-        }
-    }
+    let text_spans = game_typed_spans(&typed, current_sentence);
 
     let mut lines = Vec::new();
     lines.push(Line::from(""));
@@ -1508,10 +1401,18 @@ fn draw_game_over(f: &mut Frame, area: Rect, app: &App, game_type: GameType, _is
     ]));
     lines.push(Line::from(""));
 
-    // 완료 단어 수
+    // 완료 진행 (모드는 단어 / 긴 글은 문단)
+    let progress_label = if game_type == GameType::LongTextRace {
+        "✅ 완료 문단: "
+    } else {
+        "✅ 완료 단어: "
+    };
     lines.push(Line::from(vec![
-        Span::styled("✅ 완료 단어: ", Style::default().fg(Color::Gray)),
-        Span::styled(format!("{} / {}", app.game_words_correct, app.game_words_total), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(progress_label, Style::default().fg(Color::Gray)),
+        Span::styled(
+            format!("{} / {}", app.game_words_correct, app.game_words_total),
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ),
     ]));
 
     // 최대 콤보

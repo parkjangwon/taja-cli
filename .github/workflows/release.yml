@@ -34,6 +34,12 @@ jobs:
             archive_name: taja-cli-linux-x64.tar.gz
             binary: taja-cli
 
+          # Linux ARM64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            archive_name: taja-cli-linux-arm64.tar.gz
+            binary: taja-cli
+
           # Windows x64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -49,9 +55,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Linux musl 타겟을 위한 musl-tools 설치
-      - name: Install musl-tools (Linux only)
-        if: matrix.os == 'ubuntu-latest'
+      # Linux musl 타겟을 위한 musl-tools 설치 (x64 musl 빌드만)
+      - name: Install musl-tools (Linux x64 musl only)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build release binary
@@ -114,12 +120,14 @@ jobs:
             - `taja-cli-macos-arm64.tar.gz` — macOS Apple Silicon (M1/M2/M3)
             - `taja-cli-macos-x64.tar.gz` — macOS Intel
             - `taja-cli-linux-x64.tar.gz` — Linux x64
+            - `taja-cli-linux-arm64.tar.gz` — Linux ARM64
             - `taja-cli-windows-x64.zip` — Windows x64
 
           files: |
             taja-cli-macos-arm64.tar.gz
             taja-cli-macos-x64.tar.gz
             taja-cli-linux-x64.tar.gz
+            taja-cli-linux-arm64.tar.gz
             taja-cli-windows-x64.zip
           draft: false
           prerelease: false

@@ -74,6 +74,7 @@ npx taja-cli
 | macOS | Apple Silicon (`arm64`) | `taja-cli-macos-arm64.tar.gz` |
 | macOS | Intel (`x64`) | `taja-cli-macos-x64.tar.gz` |
 | Linux | `x64` | `taja-cli-linux-x64.tar.gz` |
+| Linux | `arm64` | `taja-cli-linux-arm64.tar.gz` |
 | Windows | `x64` | `taja-cli-windows-x64.zip` |
 
 #### 업데이트 / 삭제
@@ -114,16 +115,18 @@ cargo install --path .
 
 ```text
 taja-cli/
-├── Cargo.toml          # 의존성 및 패키지 메타데이터
-├── README.md           # 프로젝트 가이드
+├── Cargo.toml              # 의존성 및 패키지 메타데이터
+├── README.md
+├── npm/                    # npm 배포 래퍼 (taja 커맨드)
+│   ├── package.json
+│   └── bin/index.js
 └── src/
-    ├── main.rs         # 터미널 이벤트 루프 및 애플리케이션 라이프사이클
-    ├── app.rs          # 화면 상태 관리, 단어/문장 로드 및 타자 에셋 DB
-    ├── hangeul.rs      # 핵심 한글 오토마타 엔진, 자모 분해 및 타이핑 정오 판정
-    ├── storage.rs      # JSON 파일 기반 기록 저장 및 오타 취약 키 분석 엔진
-    └── ui/
-        ├── mod.rs      # UI 렌더링 총괄 (메뉴, 통계, 연습 모드 레이아웃 분할)
-        └── keyboard.rs # 가상 키보드 가이드 위젯 및 표준 운지법 매핑
+    ├── main.rs             # 터미널 이벤트 루프·입력 처리
+    ├── app.rs              # 상태, 에셋, 게임/연습 로직
+    ├── hangeul.rs          # 두벌식 오토마타·정오 판정
+    ├── storage.rs          # JSON 기록 저장
+    ├── ui.rs               # 화면 렌더링 총괄
+    └── ui/keyboard.rs      # 가상 키보드·운지 가이드
 ```
 
 ---

@@ -10,9 +10,12 @@ const JUNGSEONG: &[char] = &[
     'ㅏ', 'ㅐ', 'ㅑ', 'ㅒ', 'ㅓ', 'ㅔ', 'ㅕ', 'ㅖ', 'ㅗ', 'ㅘ', 'ㅙ', 'ㅚ', 'ㅛ', 'ㅜ', 'ㅝ', 'ㅞ', 'ㅟ', 'ㅠ', 'ㅡ', 'ㅢ', 'ㅣ'
 ];
 
-/// 종성 리스트 (28개, 0번인 ' ' 혹은 '\0'은 종성 없음)
+/// 종성 리스트 (28개, 유니코드 Hangul Syllables 분해 순서)
+/// index: 0없음 1ㄱ 2ㄲ 3ㄳ 4ㄴ 5ㄵ 6ㄶ 7ㄷ 8ㄹ 9ㄺ 10ㄻ 11ㄼ 12ㄽ 13ㄾ 14ㄿ 15ㅀ
+///        16ㅁ 17ㅂ 18ㅄ 19ㅅ 20ㅆ 21ㅇ 22ㅈ 23ㅊ 24ㅋ 25ㅌ 26ㅍ 27ㅎ
 const JONGSEONG: &[char] = &[
-    '\0', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㅈ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ', 'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'
+    '\0', 'ㄱ', 'ㄲ', 'ㄳ', 'ㄴ', 'ㄵ', 'ㄶ', 'ㄷ', 'ㄹ', 'ㄺ', 'ㄻ', 'ㄼ', 'ㄽ', 'ㄾ', 'ㄿ', 'ㅀ',
+    'ㅁ', 'ㅂ', 'ㅄ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ',
 ];
 
 /// 영문 쿼티 키를 한글 자모로 매핑
@@ -186,6 +189,7 @@ impl HangulAutomata {
     }
 
     /// 현재 조합 중인 임시 글자 반환
+    #[allow(dead_code)]
     pub fn get_current_char(&self) -> Option<char> {
         self.current.to_char()
     }
@@ -212,6 +216,7 @@ impl HangulAutomata {
         self.current = HangulState::Empty;
         self.strokes = 0;
         self.english_mode = false;
+        self.raw_jamo_mode = false;
     }
 
     /// 텍스트 전체를 직접 설정 (완성형 상태로 설정할 때 사용)
@@ -487,6 +492,8 @@ pub fn fully_decompose_hangul(c: char) -> Vec<char> {
 
 /// 실시간 타자 판정 완화 알고리즘
 /// typed_char가 expected_char로 가기 위해 조합 중인 올바른 중간 단계인지 검사
+/// (문자열 단위 판정은 `is_input_prefix_of` 권장; 단위 테스트·하위 호환용 유지)
+#[allow(dead_code)]
 pub fn is_typing_valid(typed_char: char, expected_char: char) -> bool {
     if typed_char == expected_char {
         return true;
@@ -529,6 +536,18 @@ pub fn is_input_exact_match(typed: &str, expected: &str) -> bool {
     fully_decompose_str(typed) == fully_decompose_str(expected)
 }
 
+/// 다음에 쳐야 할 물리 자모(또는 영문 글자). 키보드 가이드용.
+pub fn next_input_unit(typed: &str, expected: &str) -> Option<char> {
+    let t = fully_decompose_str(typed);
+    let e = fully_decompose_str(expected);
+    let match_len = t
+        .iter()
+        .zip(e.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    e.get(match_len).copied()
+}
+
 /// 입력이 목표의 올바른 자모 접두사일 때, 자모가 완전히 채워진 목표 글자 수.
 /// 타자 레인 진행 표시 등에서 사용. 잘못된 입력이면 정확히 일치하는 선행 글자 수만 반환.
 pub fn fully_matched_chars(typed: &str, expected: &str) -> usize {
@@ -563,7 +582,8 @@ pub fn fully_matched_chars(typed: &str, expected: &str) -> usize {
 /// 조합 중인 마지막 미완성 자모(예: 'ㄲ'을 치고 아직 'ㅣ'를 안 친 상태)는 글자 수에서 제외하여 조기 종료 방지.
 ///
 /// 주의: 오타가 있어도 글자 칸을 채운 것으로 세므로, **성공/파괴 판정에는 쓰지 말 것**.
-/// 자리/낱말 연습의 진행·조기 종료 방지용이다. 게임 완료 판정은 `is_input_exact_match`를 사용한다.
+/// 완료 판정은 `is_input_exact_match` 권장. 레거시·단위 테스트용으로 유지.
+#[allow(dead_code)]
 pub fn count_completed_chars(typed: &str, expected: &str) -> usize {
     let typed_chars: Vec<char> = typed.chars().collect();
     let expected_chars: Vec<char> = expected.chars().collect();
@@ -761,5 +781,38 @@ mod tests {
         // "한" 확정 + "ㄱ" 조합 → index 1
         assert_eq!(automata.get_text().chars().count(), 2);
         assert_eq!(automata.expected_char_index(), 1);
+    }
+
+    #[test]
+    fn test_jongseong_table_and_complex_batchim() {
+        // 종성 인덱스: ㄵ=5, ㅈ=22
+        assert_eq!(JONGSEONG[5], 'ㄵ');
+        assert_eq!(JONGSEONG[22], 'ㅈ');
+        assert_eq!(JONGSEONG.len(), 28);
+
+        let mut automata = HangulAutomata::new();
+        // 갖: ㄱ(r) ㅏ(k) ㅈ(w)
+        automata.push_char('r', None);
+        automata.push_char('k', None);
+        automata.push_char('w', None);
+        assert_eq!(automata.get_text(), "갖");
+
+        automata.clear();
+        // 앉: ㅇ(d) ㅏ(k) ㄴ(s) ㅈ(w) → ㄵ
+        automata.push_char('d', None);
+        automata.push_char('k', None);
+        automata.push_char('s', None);
+        automata.push_char('w', None);
+        assert_eq!(automata.get_text(), "앉");
+    }
+
+    #[test]
+    fn test_clear_resets_raw_jamo_mode() {
+        let mut automata = HangulAutomata::new();
+        automata.raw_jamo_mode = true;
+        automata.english_mode = true;
+        automata.clear();
+        assert!(!automata.raw_jamo_mode);
+        assert!(!automata.english_mode);
     }
 }

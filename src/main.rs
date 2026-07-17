@@ -364,7 +364,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                     app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
                                 }
                                 KeyCode::Down => {
-                                    if app.menu_selected_idx < 4 {
+                                    if app.menu_selected_idx < 5 {
                                         app.menu_selected_idx += 1;
                                     }
                                 }
@@ -375,6 +375,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                         2 => GameType::TypingRain,
                                         3 => GameType::FlashTyping,
                                         4 => GameType::DailyChallenge,
+                                        5 => GameType::LongTextRace,
                                         _ => GameType::TimeAttack,
                                     };
                                     app.active_screen = ActiveScreen::GameLanguageMenu { game_type };
@@ -421,6 +422,10 @@ fn run_app<B: ratatui::backend::Backend>(
                                             app.setup_daily_challenge(is_korean);
                                             app.active_screen = ActiveScreen::DailyChallenge { is_korean };
                                         }
+                                        GameType::LongTextRace => {
+                                            app.active_screen = ActiveScreen::LongTextRaceMenu { is_korean };
+                                            app.menu_selected_idx = 0;
+                                        }
                                     }
                                 }
                                 KeyCode::Esc => {
@@ -431,6 +436,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                         GameType::TypingRain => 2,
                                         GameType::FlashTyping => 3,
                                         GameType::DailyChallenge => 4,
+                                        GameType::LongTextRace => 5,
                                     };
                                 }
                                 _ => {}
@@ -718,6 +724,69 @@ fn run_app<B: ratatui::backend::Backend>(
                             }
                         }
 
+                        // ── 긴 글 레이스 메뉴 ──
+                        ActiveScreen::LongTextRaceMenu { is_korean } => {
+                            let max_idx = App::get_long_text_titles(is_korean).len().saturating_sub(1);
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < max_idx {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let idx = app.menu_selected_idx;
+                                    app.setup_long_text_race(is_korean, idx);
+                                    app.active_screen = ActiveScreen::LongTextRace { is_korean, text_idx: idx };
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameLanguageMenu { game_type: GameType::LongTextRace };
+                                    app.menu_selected_idx = 0;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // ── 긴 글 레이스 실제 연습 ──
+                        ActiveScreen::LongTextRace { is_korean, text_idx } => {
+                            app.ensure_timer_started();
+
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::LongTextRaceMenu { is_korean };
+                                    app.menu_selected_idx = text_idx;
+                                }
+                                KeyCode::Backspace => {
+                                    app.input_automata.backspace();
+                                }
+                                KeyCode::Enter => {
+                                    app.input_automata.commit_current();
+                                    let has_next = app.long_text_next_paragraph();
+                                    if !has_next {
+                                        app.update_elapsed_time();
+                                        app.save_session_record("게임-긴글레이스", if is_korean { "한글" } else { "영어" });
+                                        app.active_screen = ActiveScreen::GameOver { game_type: GameType::LongTextRace, is_korean };
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
+                                    app.input_automata.push_char(c, expected_char);
+                                    if let Some(ec) = expected_char {
+                                        let typed_text = app.input_automata.get_text();
+                                        let pos = typed_text.chars().count().saturating_sub(1);
+                                        if let Some(tc) = typed_text.chars().nth(pos) {
+                                            if !hangeul::is_typing_valid(tc, ec) {
+                                                app.record_error(ec, c);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
                         // ── 게임 오버 화면 ──
                         ActiveScreen::GameOver { game_type, is_korean } => {
                             match key.code {
@@ -745,11 +814,23 @@ fn run_app<B: ratatui::backend::Backend>(
                                             app.setup_daily_challenge(is_korean);
                                             app.active_screen = ActiveScreen::DailyChallenge { is_korean };
                                         }
+                                        GameType::LongTextRace => {
+                                            let idx = app.long_text_selected_idx;
+                                            app.setup_long_text_race(is_korean, idx);
+                                            app.active_screen = ActiveScreen::LongTextRace { is_korean, text_idx: idx };
+                                        }
                                     }
                                 }
                                 KeyCode::Esc => {
                                     app.active_screen = ActiveScreen::GameModeMenu;
-                                    app.menu_selected_idx = 0;
+                                    app.menu_selected_idx = match game_type {
+                                        GameType::TimeAttack => 0,
+                                        GameType::Survival => 1,
+                                        GameType::TypingRain => 2,
+                                        GameType::FlashTyping => 3,
+                                        GameType::DailyChallenge => 4,
+                                        GameType::LongTextRace => 5,
+                                    };
                                 }
                                 _ => {}
                             }
@@ -783,6 +864,12 @@ fn run_app<B: ratatui::backend::Backend>(
             }
             ActiveScreen::FlashTyping { .. } => {
                 app.check_flash_visibility();
+            }
+            ActiveScreen::LongTextRace { .. } => {
+                let current_secs = app.elapsed_time.as_secs() as usize;
+                if current_secs > app.long_text_cpm_history.len() {
+                    app.record_cpm_history();
+                }
             }
             _ => {}
         }

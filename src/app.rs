@@ -13,6 +13,7 @@ pub enum GameType {
     TypingRain,
     FlashTyping,
     DailyChallenge,
+    LongTextRace,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,8 @@ pub enum ActiveScreen {
     TypingRain { is_korean: bool },
     FlashTyping { is_korean: bool },
     DailyChallenge { is_korean: bool },
+    LongTextRaceMenu { is_korean: bool },
+    LongTextRace { is_korean: bool, text_idx: usize },
     GameOver { game_type: GameType, is_korean: bool },
 }
 
@@ -108,6 +111,13 @@ pub struct App {
     // ── 데일리 챌린지 상태 ──
     pub daily_challenge_completed: bool,
     pub daily_best_score: Option<usize>,
+
+    // ── 긴 글 레이스 상태 ──
+    pub long_text_paragraphs: Vec<String>,
+    pub long_text_current_para_idx: usize,
+    pub long_text_title: String,
+    pub long_text_cpm_history: Vec<usize>,
+    pub long_text_selected_idx: usize,
 }
 
 impl App {
@@ -156,6 +166,12 @@ impl App {
             // 데일리 챌린지
             daily_challenge_completed: false,
             daily_best_score: None,
+            // 긴 글 레이스
+            long_text_paragraphs: Vec::new(),
+            long_text_current_para_idx: 0,
+            long_text_title: String::new(),
+            long_text_cpm_history: Vec::new(),
+            long_text_selected_idx: 0,
         }
     }
 
@@ -772,6 +788,10 @@ impl App {
         self.rain_active_idx = None;
         self.daily_challenge_completed = false;
         self.daily_best_score = None;
+        self.long_text_paragraphs.clear();
+        self.long_text_current_para_idx = 0;
+        self.long_text_title.clear();
+        self.long_text_cpm_history.clear();
         self.start_time = None;
         self.elapsed_time = Duration::default();
         self.accumulated_strokes = 0;
@@ -1273,4 +1293,127 @@ impl App {
         self.update_automata_modes();
         true
     }
+
+    // ════════════════════════════════════════════════════════
+    // 긴 글 레이스 모드 (Long Text Race)
+    // ════════════════════════════════════════════════════════
+
+    pub fn get_long_text_titles(is_korean: bool) -> Vec<&'static str> {
+        if is_korean {
+            vec![
+                "1. 애국가 (1~4절)",
+                "2. 훈민정음 어제 서문",
+                "3. 진달래꽃 (김소월)",
+                "4. 대한민국 헌법 제1장",
+            ]
+        } else {
+            vec![
+                "1. Gettysburg Address (아브라함 링컨)",
+                "2. I Have a Dream (마틴 루터 킹)",
+                "3. The Road Not Taken (로버트 프로스트)",
+            ]
+        }
+    }
+
+    pub fn setup_long_text_race(&mut self, is_korean: bool, text_idx: usize) {
+        self.reset_game_state();
+        self.long_text_selected_idx = text_idx;
+        let titles = Self::get_long_text_titles(is_korean);
+        self.long_text_title = titles.get(text_idx).copied().unwrap_or("알 수 없는 긴 글").to_string();
+
+        let raw_text = if is_korean {
+            match text_idx {
+                0 => "\
+동해 물과 백두산이 마르고 닳도록 하느님이 보우하사 우리나라 만세.
+남산 위에 저 소나무 철갑을 두른 듯 바람 서리 불변함은 우리 기상일세.
+가을 하늘 공활한데 높고 구름 없이 밝은 달은 우리 가슴 일편단심일세.
+이 기상과 이 맘으로 충성을 다하여 괴로우나 즐거우나 나라 사랑하세.
+무궁화 삼천리 화려 강산 대한 사람 대한으로 길이 보전하세.",
+                1 => "\
+나랏말싸미 듕귁에 달아 문자와로 서르 사맛디 아니할쎄
+이런 젼차로 어린 백셩이 니르고져 홇배이셔도
+마참내 제 뜨들 시러 펴디 못할 노미 하니라
+내 이랄 위하야 어여삐 너겨 새로 스물여덟 자랄 맹가노니
+사람마다 해여 수비 니겨 날로 쑤메 편안케 하고져 할 따름이니라",
+                2 => "\
+나 보기가 역겨워 가실 때에는 말없이 고이 보내 드리우리다.
+영변에 약산 진달래꽃 아름 따다 가실 길에 뿌리우리다.
+가시는 걸음 걸음 놓인 그 꽃을 사뿐히 즈려밟고 가시옵소서.
+나 보기가 역겨워 가실 때에는 죽어도 아니 눈물 흘리우리다.",
+                _ => "\
+대한민국은 민주공화국이다. 대한민국의 주권은 국민에게 있고, 모든 권력은 국민으로부터 나온다.
+대한민국 국민이 되는 요건은 법률로 정한다. 국가는 재외국민을 보호할 의무를 진다.
+대한민국의 영토는 한반도와 그 부속도서로 한다. 대한민국은 통일을 지향하며 평화적 통일 정책을 수립하고 추진한다.
+대한민국은 국제평화의 유지에 노력하고 침략적 전쟁을 부인한다. 국군은 국가의 안전보장과 국토방위의 의무를 수행한다.",
+            }
+        } else {
+            match text_idx {
+                0 => "\
+Four score and seven years ago our fathers brought forth on this continent, a new nation, conceived in Liberty, and dedicated to the proposition that all men are created equal.
+Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure.
+We are met on a great battle-field of that war. We have come to dedicate a portion of that field, as a final resting place for those who here gave their lives that that nation might live.",
+                1 => "\
+I say to you today, my friends, so even though we face the difficulties of today and tomorrow, I still have a dream.
+It is a dream deeply rooted in the American dream.
+I have a dream that one day this nation will rise up and live out the true meaning of its creed: We hold these truths to be self-evident, that all men are created equal.
+I have a dream that my four little children will one day live in a nation where they will not be judged by the color of their skin but by the content of their character.",
+                _ => "\
+Two roads diverged in a yellow wood, and sorry I could not travel both and be one traveler, long I stood.
+And looked down one as far as I could to where it bent in the undergrowth; then took the other, as just as fair.
+And having perhaps the better claim, because it was grassy and wanted wear; though as for that the passing there had worn them really about the same.
+I shall be telling this with a sigh somewhere ages and ages hence: Two roads diverged in a wood, and I took the one less traveled by, and that has made all the difference.",
+            }
+        };
+
+        self.long_text_paragraphs = raw_text.lines().map(|s| s.to_string()).collect();
+        self.long_text_current_para_idx = 0;
+        
+        let first_para = self.long_text_paragraphs[0].clone();
+        self.start_practice_session(first_para);
+        self.start_time = Some(Instant::now());
+    }
+
+    /// 긴 글 레이스에서 다음 문단(줄)으로 전환
+    pub fn long_text_next_paragraph(&mut self) -> bool {
+        self.accumulated_strokes += self.input_automata.get_strokes();
+        
+        // 현재 라인의 오타 누적
+        let typed = self.input_automata.get_text();
+        let expected = &self.target_text;
+        let exp_len = expected.chars().count();
+        let typ_len = typed.chars().count();
+        if typ_len < exp_len {
+            self.total_errors += exp_len - typ_len;
+        }
+
+        self.long_text_current_para_idx += 1;
+        if self.long_text_current_para_idx >= self.long_text_paragraphs.len() {
+            // 모든 문단 타이핑 완료
+            self.update_elapsed_time();
+            let cpm = self.get_cpm();
+            let acc = self.get_accuracy();
+            // 완주 스코어 계산
+            self.game_mode_score = ((cpm as f64) * (acc / 100.0)) as usize;
+            return false;
+        }
+
+        let next_para = self.long_text_paragraphs[self.long_text_current_para_idx].clone();
+        self.input_automata.clear();
+        self.target_text = next_para;
+        self.update_automata_modes();
+        true
+    }
+
+    /// 실시간 CPM 추이 기록용 헬퍼 (매 초마다 호출하여 추이 배열에 저장)
+    pub fn record_cpm_history(&mut self) {
+        let current_cpm = self.get_cpm();
+        if current_cpm > 0 {
+            self.long_text_cpm_history.push(current_cpm);
+            // 너무 많이 쌓이지 않도록 최근 30개 기록만 보존
+            if self.long_text_cpm_history.len() > 30 {
+                self.long_text_cpm_history.remove(0);
+            }
+        }
+    }
 }
+

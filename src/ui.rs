@@ -45,6 +45,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ActiveScreen::TypingRain { is_korean } => draw_typing_rain(f, chunks[1], app, *is_korean),
         ActiveScreen::FlashTyping { is_korean } => draw_flash_typing(f, chunks[1], app, *is_korean),
         ActiveScreen::DailyChallenge { is_korean } => draw_daily_challenge(f, chunks[1], app, *is_korean),
+        ActiveScreen::LongTextRaceMenu { is_korean } => draw_long_text_menu(f, chunks[1], app, *is_korean),
+        ActiveScreen::LongTextRace { is_korean, text_idx } => draw_long_text_race(f, chunks[1], app, *is_korean, *text_idx),
         ActiveScreen::GameOver { game_type, is_korean } => draw_game_over(f, chunks[1], app, *game_type, *is_korean),
     }
 
@@ -112,6 +114,12 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
         ActiveScreen::FlashTyping { .. } => {
             " [Esc]: 게임 중단  [Enter]: 정답 제출 / 다음 라운드 "
         }
+        ActiveScreen::LongTextRaceMenu { .. } => {
+            " [↑/↓]: 이동  [Enter]: 선택  [Esc]: 이전 화면 "
+        }
+        ActiveScreen::LongTextRace { .. } => {
+            " [Esc]: 게임 중단  [Enter]: 다음 줄로 (문단 전환)  [아무 키나 입력해 시작] "
+        }
         ActiveScreen::GameOver { .. } => {
             " [Enter]: 다시 하기  [Esc]: 게임 모드 메뉴로 "
         }
@@ -123,7 +131,8 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     match app.active_screen {
         ActiveScreen::FingerPractice { .. } | ActiveScreen::WordPractice { .. } | ActiveScreen::SentencePractice { .. }
         | ActiveScreen::TimeAttack { .. } | ActiveScreen::Survival { .. } | ActiveScreen::TypingRain { .. }
-        | ActiveScreen::FlashTyping { .. } | ActiveScreen::DailyChallenge { .. } => {
+        | ActiveScreen::FlashTyping { .. } | ActiveScreen::DailyChallenge { .. }
+        | ActiveScreen::LongTextRace { .. } => {
             footer_spans.push(Span::styled(
                 " (⚠️ OS 입력기: 영문 필수) ",
                 Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
@@ -810,6 +819,7 @@ fn draw_game_mode_menu(f: &mut Frame, area: Rect, app: &App) {
         "3. 🌧️  타자 레인 (Typing Rain)",
         "4. 👻 플래시 타이핑 (Flash Typing)",
         "5. 🏆 데일리 챌린지 (Daily Challenge)",
+        "6. 🏎️  긴 글 레이스 (Long Text Race)",
     ];
 
     let layout = Layout::default()
@@ -866,6 +876,7 @@ fn draw_game_language_menu(f: &mut Frame, area: Rect, app: &App, game_type: Game
         GameType::TypingRain => "🌧️ 타자 레인",
         GameType::FlashTyping => "👻 플래시 타이핑",
         GameType::DailyChallenge => "🏆 데일리 챌린지",
+        GameType::LongTextRace => "🏎️ 긴 글 레이스",
     };
 
     let options = vec![
@@ -1484,6 +1495,7 @@ fn draw_game_over(f: &mut Frame, area: Rect, app: &App, game_type: GameType, _is
         GameType::TypingRain => "🌧️ 타자 레인",
         GameType::FlashTyping => "👻 플래시 타이핑",
         GameType::DailyChallenge => "🏆 데일리 챌린지",
+        GameType::LongTextRace => "🏎️ 긴 글 레이스",
     };
 
     let block = Block::default()
@@ -1570,3 +1582,208 @@ fn draw_game_over(f: &mut Frame, area: Rect, app: &App, game_type: GameType, _is
 
     f.render_widget(paragraph, layout[1]);
 }
+
+// --- 긴 글 레이스 선택 메뉴 ---
+fn draw_long_text_menu(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
+    let titles = App::get_long_text_titles(is_korean);
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(" 🏎️ 긴 글 레이스 목록 ")
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from("연습할 긴 글을 선택하세요."));
+    lines.push(Line::from(""));
+
+    for (idx, item) in titles.iter().enumerate() {
+        if idx == app.menu_selected_idx {
+            lines.push(Line::from(Span::styled(
+                format!(" ➔ {}", item),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("   {}", item),
+                Style::default().fg(Color::White),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(Color::White))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    let vertical_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(layout[1]);
+
+    f.render_widget(paragraph, vertical_layout[1]);
+}
+
+// --- 긴 글 레이스 실제 연습 화면 ---
+fn draw_long_text_race(f: &mut Frame, area: Rect, app: &App, _is_korean: bool, _text_idx: usize) {
+    let main_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // 제목 바
+            Constraint::Min(10),   // 스크롤 본문 뷰포트
+            Constraint::Length(5), // 하단 스탯 & 미니 그래프
+        ])
+        .split(area);
+
+    // 1. 상단 제목 바
+    let title_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Magenta));
+    let progress_pct = (app.long_text_current_para_idx as f64 / app.long_text_paragraphs.len() as f64) * 100.0;
+    let title_line = Line::from(vec![
+        Span::styled(format!(" 🏎️  {}  ", app.long_text_title), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" |  진행률: {:.1}% ({}/{}) ", progress_pct, app.long_text_current_para_idx, app.long_text_paragraphs.len()), Style::default().fg(Color::Cyan)),
+    ]);
+    let title_p = Paragraph::new(title_line).block(title_block);
+    f.render_widget(title_p, main_layout[0]);
+
+    // 2. 스크롤 본문 뷰포트 (현재 인덱스 기준 상하 2문단씩 노출)
+    let body_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(" 📄 본문 타이핑 ")
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let current_idx = app.long_text_current_para_idx;
+    let total_paras = app.long_text_paragraphs.len();
+
+    let mut body_lines = Vec::new();
+    body_lines.push(Line::from(""));
+
+    // 현재 문단 앞 2줄 노출
+    let start_idx = current_idx.saturating_sub(2);
+    for idx in start_idx..current_idx {
+        body_lines.push(Line::from(Span::styled(
+            format!("   {}", app.long_text_paragraphs[idx]),
+            Style::default().fg(Color::DarkGray),
+        )));
+        body_lines.push(Line::from(""));
+    }
+
+    // 현재 타이핑 중인 문단 (정오 표시 포함)
+    let current_word = &app.target_text;
+    let typed = app.input_automata.get_text();
+    let mut text_spans = vec![Span::styled(" ➔ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
+
+    for (i, target_char) in current_word.chars().enumerate() {
+        let typed_char_opt = typed.chars().nth(i);
+        match typed_char_opt {
+            Some(tc) => {
+                if hangeul::is_typing_valid(tc, target_char) {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
+                } else {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
+                }
+            }
+            None => {
+                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
+            }
+        }
+    }
+    body_lines.push(Line::from(text_spans));
+    body_lines.push(Line::from(""));
+
+    // 다음 문단 2줄 노출
+    let end_idx = std::cmp::min(current_idx + 3, total_paras);
+    for idx in (current_idx + 1)..end_idx {
+        body_lines.push(Line::from(Span::styled(
+            format!("   {}", app.long_text_paragraphs[idx]),
+            Style::default().fg(Color::Gray),
+        )));
+        body_lines.push(Line::from(""));
+    }
+
+    let body_p = Paragraph::new(body_lines).block(body_block).wrap(Wrap { trim: false });
+    f.render_widget(body_p, main_layout[1]);
+
+    // 3. 하단 실시간 통계 및 미니 타속 그래프
+    let stats_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" 📈 실시간 분석 ")
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    // 미니 타속 변화 차트 생성
+    let mut graph_spans = vec![Span::styled("타속 변화: ", Style::default().fg(Color::Gray))];
+    if app.long_text_cpm_history.is_empty() {
+        graph_spans.push(Span::styled("데이터 측정 중...", Style::default().fg(Color::DarkGray)));
+    } else {
+        let max_val = *app.long_text_cpm_history.iter().max().unwrap_or(&1) as f64;
+        for &val in app.long_text_cpm_history.iter() {
+            let ratio = val as f64 / max_val;
+            let block_char = if ratio < 0.15 {
+                " "
+            } else if ratio < 0.3 {
+                "▃"
+            } else if ratio < 0.45 {
+                "▄"
+            } else if ratio < 0.6 {
+                "▅"
+            } else if ratio < 0.75 {
+                "▆"
+            } else if ratio < 0.9 {
+                "▇"
+            } else {
+                "█"
+            };
+            let color = if val > 400 {
+                Color::Magenta
+            } else if val > 250 {
+                Color::Green
+            } else {
+                Color::Yellow
+            };
+            graph_spans.push(Span::styled(block_char, Style::default().fg(color)));
+        }
+        graph_spans.push(Span::styled(format!(" {} CPM", app.get_cpm()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+    }
+
+    let stats_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
+        ])
+        .split(stats_block.inner(main_layout[2]));
+
+    let stat_info = Line::from(vec![
+        Span::styled("⌨️ 현재 속도: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{} CPM", app.get_cpm()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  📊 정확도: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{:.1}%", app.get_accuracy()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  ⚠️ 오타 수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}회", app.total_errors), Style::default().fg(Color::Red)),
+    ]);
+
+    f.render_widget(stats_block, main_layout[2]);
+    f.render_widget(Paragraph::new(stat_info), stats_layout[0]);
+    f.render_widget(Paragraph::new(Line::from(graph_spans)), stats_layout[1]);
+}
+

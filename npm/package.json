@@ -1,0 +1,33 @@
+{
+  "name": "taja-cli",
+  "version": "0.1.0",
+  "description": "A modern fullscreen Korean/English TUI typing practice game with built-in Hangul automata",
+  "main": "bin/index.js",
+  "bin": {
+    "taja": "bin/index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/parkjangwon/taja-cli.git"
+  },
+  "keywords": [
+    "typing",
+    "tui",
+    "hangul",
+    "keyboard",
+    "practice",
+    "terminal"
+  ],
+  "author": "parkjangwon",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/parkjangwon/taja-cli/issues"
+  },
+  "homepage": "https://github.com/parkjangwon/taja-cli#readme",
+  "engines": {
+    "node": ">=12.0.0"
+  }
+}

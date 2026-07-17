@@ -151,8 +151,14 @@ jobs:
         run: |
           TAG=${{ github.ref_name }}
           VERSION=${TAG#v}
-          npm version $VERSION --no-git-tag-version
+          # 이미 같은 버전이어도 실패하지 않도록 npm pkg set 사용
+          npm pkg set version="$VERSION"
+          # 바이너리 다운로더가 참조하는 Release 태그 버전 동기화
+          if [ -f bin/index.js ]; then
+            sed -i "s/const VERSION = '.*'/const VERSION = '$VERSION'/" bin/index.js
+          fi
           echo "Synced npm version to: $VERSION"
+          node -e "console.log(require('./package.json').version)"
 
       - name: Publish to npm registry
         working-directory: npm

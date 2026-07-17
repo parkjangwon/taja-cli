@@ -3,7 +3,7 @@ mod storage;
 mod app;
 mod ui;
 
-use app::{App, ActiveScreen};
+use app::{App, ActiveScreen, GameType};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -59,7 +59,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                     app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
                                 }
                                 KeyCode::Down => {
-                                    if app.menu_selected_idx < 4 {
+                                    if app.menu_selected_idx < 5 {
                                         app.menu_selected_idx += 1;
                                     }
                                 }
@@ -82,7 +82,11 @@ fn run_app<B: ratatui::backend::Backend>(
                                             // 자주 틀리는 키 목록 캐시 갱신
                                             app.cached_frequent_errors = app.storage.get_frequent_errors(10);
                                         }
-                                        4 => return Ok(()), // 종료
+                                        4 => {
+                                            app.active_screen = ActiveScreen::GameModeMenu;
+                                            app.menu_selected_idx = 0;
+                                        }
+                                        5 => return Ok(()), // 종료
                                         _ => {}
                                     }
                                 }
@@ -349,6 +353,407 @@ fn run_app<B: ratatui::backend::Backend>(
                                 app.menu_selected_idx = 3;
                             }
                         }
+
+                        // ════════════════════════════════════════
+                        // 게임 모드 이벤트 핸들러
+                        // ════════════════════════════════════════
+
+                        ActiveScreen::GameModeMenu => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 4 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let game_type = match app.menu_selected_idx {
+                                        0 => GameType::TimeAttack,
+                                        1 => GameType::Survival,
+                                        2 => GameType::TypingRain,
+                                        3 => GameType::FlashTyping,
+                                        4 => GameType::DailyChallenge,
+                                        _ => GameType::TimeAttack,
+                                    };
+                                    app.active_screen = ActiveScreen::GameLanguageMenu { game_type };
+                                    app.menu_selected_idx = 0;
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::MainMenu;
+                                    app.menu_selected_idx = 4;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        ActiveScreen::GameLanguageMenu { game_type } => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 1 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let is_korean = app.menu_selected_idx == 0;
+                                    match game_type {
+                                        GameType::TimeAttack => {
+                                            app.active_screen = ActiveScreen::GameTimeSelect { is_korean };
+                                            app.menu_selected_idx = 0;
+                                        }
+                                        GameType::Survival => {
+                                            app.setup_survival(is_korean);
+                                            app.active_screen = ActiveScreen::Survival { is_korean };
+                                        }
+                                        GameType::TypingRain => {
+                                            app.active_screen = ActiveScreen::TypingRain { is_korean };
+                                            app.setup_typing_rain(is_korean);
+                                        }
+                                        GameType::FlashTyping => {
+                                            app.setup_flash_typing(is_korean);
+                                            app.active_screen = ActiveScreen::FlashTyping { is_korean };
+                                        }
+                                        GameType::DailyChallenge => {
+                                            app.setup_daily_challenge(is_korean);
+                                            app.active_screen = ActiveScreen::DailyChallenge { is_korean };
+                                        }
+                                    }
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameModeMenu;
+                                    app.menu_selected_idx = match game_type {
+                                        GameType::TimeAttack => 0,
+                                        GameType::Survival => 1,
+                                        GameType::TypingRain => 2,
+                                        GameType::FlashTyping => 3,
+                                        GameType::DailyChallenge => 4,
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        ActiveScreen::GameTimeSelect { is_korean } => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 2 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let time_secs = match app.menu_selected_idx {
+                                        0 => 30,
+                                        1 => 60,
+                                        2 => 120,
+                                        _ => 60,
+                                    };
+                                    app.setup_time_attack(is_korean, time_secs);
+                                    app.active_screen = ActiveScreen::TimeAttack { is_korean };
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameLanguageMenu { game_type: GameType::TimeAttack };
+                                    app.menu_selected_idx = 0;
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // ── 시간 제한 모드 ──
+                        ActiveScreen::TimeAttack { is_korean } => {
+                            // 시간 초과 체크
+                            if app.is_time_attack_expired() {
+                                app.update_elapsed_time();
+                                app.save_session_record("게임-시간제한", if is_korean { "한글" } else { "영어" });
+                                app.active_screen = ActiveScreen::GameOver { game_type: GameType::TimeAttack, is_korean };
+                            } else {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        app.active_screen = ActiveScreen::GameModeMenu;
+                                        app.menu_selected_idx = 0;
+                                    }
+                                    KeyCode::Backspace => {
+                                        app.input_automata.backspace();
+                                    }
+                                    KeyCode::Char(' ') | KeyCode::Enter => {
+                                        app.input_automata.commit_current();
+                                        let typed = app.input_automata.get_text();
+                                        let expected = app.target_text.clone();
+                                        if typed.trim() != expected.trim() {
+                                            // 틀린 경우 콤보 리셋
+                                            app.game_mode_combo = 0;
+                                            app.game_words_total += 1;
+                                        } else {
+                                            app.time_attack_next_word();
+                                        }
+                                        // 새 단어로 입력 리셋 (틀린 경우도)
+                                        if typed.trim() != expected.trim() {
+                                            app.input_automata.clear();
+                                        }
+                                    }
+                                    KeyCode::Char(c) => {
+                                        let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
+                                        app.input_automata.push_char(c, expected_char);
+                                        if let Some(ec) = expected_char {
+                                            let typed_text = app.input_automata.get_text();
+                                            let pos = typed_text.chars().count().saturating_sub(1);
+                                            if let Some(tc) = typed_text.chars().nth(pos) {
+                                                if !hangeul::is_typing_valid(tc, ec) {
+                                                    app.record_error(ec, c);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        // ── 서바이벌 모드 ──
+                        ActiveScreen::Survival { is_korean } => {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameModeMenu;
+                                    app.menu_selected_idx = 1;
+                                }
+                                KeyCode::Backspace => {
+                                    app.input_automata.backspace();
+                                }
+                                KeyCode::Char(' ') | KeyCode::Enter => {
+                                    app.input_automata.commit_current();
+                                    let typed = app.input_automata.get_text();
+                                    let expected = app.target_text.clone();
+                                    let had_error = typed.trim() != expected.trim();
+                                    let has_next = app.survival_next_word(had_error);
+                                    if !has_next {
+                                        app.update_elapsed_time();
+                                        app.save_session_record("게임-서바이벌", if is_korean { "한글" } else { "영어" });
+                                        app.active_screen = ActiveScreen::GameOver { game_type: GameType::Survival, is_korean };
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
+                                    app.input_automata.push_char(c, expected_char);
+                                    if let Some(ec) = expected_char {
+                                        let typed_text = app.input_automata.get_text();
+                                        let pos = typed_text.chars().count().saturating_sub(1);
+                                        if let Some(tc) = typed_text.chars().nth(pos) {
+                                            if !hangeul::is_typing_valid(tc, ec) {
+                                                app.record_error(ec, c);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // ── 타자 레인 모드 ──
+                        ActiveScreen::TypingRain { is_korean } => {
+                            if app.game_mode_lives == 0 {
+                                app.update_elapsed_time();
+                                app.save_session_record("게임-타자레인", if is_korean { "한글" } else { "영어" });
+                                app.active_screen = ActiveScreen::GameOver { game_type: GameType::TypingRain, is_korean };
+                            } else {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        app.active_screen = ActiveScreen::GameModeMenu;
+                                        app.menu_selected_idx = 2;
+                                    }
+                                    KeyCode::Backspace => {
+                                        if let Some(active_idx) = app.rain_active_idx {
+                                            if app.rain_words[active_idx].typed_len > 0 {
+                                                app.rain_words[active_idx].typed_len -= 1;
+                                            }
+                                            app.input_automata.backspace();
+                                        }
+                                    }
+                                    KeyCode::Char(c) => {
+                                        // 활성 단어가 없으면 첫 글자가 매칭되는 단어 찾기
+                                        if app.rain_active_idx.is_none() {
+                                            // 첫 글자 매칭으로 활성화
+                                            let mut found_idx = None;
+                                            for (i, word) in app.rain_words.iter().enumerate() {
+                                                if word.destroyed || word.typed_len > 0 {
+                                                    continue;
+                                                }
+                                                let first_char = word.text.chars().next();
+                                                if let Some(fc) = first_char {
+                                                    // 한글 입력인 경우 자모 변환으로 비교
+                                                    let input_jamo = hangeul::map_qwerty_to_jamo(c);
+                                                    let target_jamos = hangeul::fully_decompose_hangul(fc);
+                                                    let matches = if let Some(ij) = input_jamo {
+                                                        target_jamos.first() == Some(&ij)
+                                                    } else {
+                                                        fc == c
+                                                    };
+                                                    if matches {
+                                                        found_idx = Some(i);
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(idx) = found_idx {
+                                                app.rain_active_idx = Some(idx);
+                                                app.rain_words[idx].active = true;
+                                                app.input_automata.clear();
+                                                // 타깃 설정
+                                                let word_text = app.rain_words[idx].text.clone();
+                                                app.target_text = word_text;
+                                                app.update_automata_modes();
+                                                let expected_char = app.target_text.chars().next();
+                                                app.input_automata.push_char(c, expected_char);
+                                                // 완성 자 비교
+                                                let typed = app.input_automata.get_text();
+                                                let typed_len = hangeul::count_completed_chars(&typed, &app.target_text);
+                                                app.rain_words[idx].typed_len = typed_len;
+                                            }
+                                        } else {
+                                            // 활성 단어에 계속 입력
+                                            let idx = app.rain_active_idx.unwrap();
+                                            let expected_pos = app.input_automata.get_text().chars().count();
+                                            let expected_char = app.target_text.chars().nth(expected_pos);
+                                            app.input_automata.push_char(c, expected_char);
+                                            let typed = app.input_automata.get_text();
+                                            let typed_len = hangeul::count_completed_chars(&typed, &app.target_text);
+                                            app.rain_words[idx].typed_len = typed_len;
+
+                                            // 단어 완성 체크
+                                            let target_len = app.target_text.chars().count();
+                                            if typed_len >= target_len {
+                                                app.rain_words[idx].destroyed = true;
+                                                app.rain_words[idx].active = false;
+                                                app.rain_active_idx = None;
+                                                app.game_mode_score += 10;
+                                                app.game_words_correct += 1;
+                                                app.game_mode_round += 1;
+                                                app.game_mode_combo += 1;
+                                                if app.game_mode_combo > app.game_mode_max_combo {
+                                                    app.game_mode_max_combo = app.game_mode_combo;
+                                                }
+                                                app.input_automata.clear();
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        // ── 플래시 타이핑 모드 ──
+                        ActiveScreen::FlashTyping { is_korean } => {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameModeMenu;
+                                    app.menu_selected_idx = 3;
+                                }
+                                KeyCode::Enter => {
+                                    if app.flash_answer_shown {
+                                        // 다음 라운드로
+                                        let has_next = app.flash_next_round();
+                                        if !has_next {
+                                            app.update_elapsed_time();
+                                            app.save_session_record("게임-플래시타이핑", if is_korean { "한글" } else { "영어" });
+                                            app.active_screen = ActiveScreen::GameOver { game_type: GameType::FlashTyping, is_korean };
+                                        }
+                                    } else if !app.flash_visible {
+                                        // 정답 제출
+                                        app.flash_submit_answer();
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    if !app.flash_answer_shown && !app.flash_visible {
+                                        app.input_automata.backspace();
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    if !app.flash_answer_shown && !app.flash_visible {
+                                        let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
+                                        app.input_automata.push_char(c, expected_char);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // ── 데일리 챌린지 모드 ──
+                        ActiveScreen::DailyChallenge { is_korean } => {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameModeMenu;
+                                    app.menu_selected_idx = 4;
+                                }
+                                KeyCode::Backspace => {
+                                    app.input_automata.backspace();
+                                }
+                                KeyCode::Char(' ') | KeyCode::Enter => {
+                                    app.input_automata.commit_current();
+                                    let has_next = app.daily_next_word();
+                                    if !has_next {
+                                        app.update_elapsed_time();
+                                        app.save_session_record("게임-데일리챌린지", if is_korean { "한글" } else { "영어" });
+                                        app.active_screen = ActiveScreen::GameOver { game_type: GameType::DailyChallenge, is_korean };
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
+                                    app.input_automata.push_char(c, expected_char);
+                                    if let Some(ec) = expected_char {
+                                        let typed_text = app.input_automata.get_text();
+                                        let pos = typed_text.chars().count().saturating_sub(1);
+                                        if let Some(tc) = typed_text.chars().nth(pos) {
+                                            if !hangeul::is_typing_valid(tc, ec) {
+                                                app.record_error(ec, c);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // ── 게임 오버 화면 ──
+                        ActiveScreen::GameOver { game_type, is_korean } => {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    // 다시 하기
+                                    match game_type {
+                                        GameType::TimeAttack => {
+                                            let time_secs = app.game_time_limit_secs;
+                                            app.setup_time_attack(is_korean, time_secs);
+                                            app.active_screen = ActiveScreen::TimeAttack { is_korean };
+                                        }
+                                        GameType::Survival => {
+                                            app.setup_survival(is_korean);
+                                            app.active_screen = ActiveScreen::Survival { is_korean };
+                                        }
+                                        GameType::TypingRain => {
+                                            app.active_screen = ActiveScreen::TypingRain { is_korean };
+                                            app.setup_typing_rain(is_korean);
+                                        }
+                                        GameType::FlashTyping => {
+                                            app.setup_flash_typing(is_korean);
+                                            app.active_screen = ActiveScreen::FlashTyping { is_korean };
+                                        }
+                                        GameType::DailyChallenge => {
+                                            app.setup_daily_challenge(is_korean);
+                                            app.active_screen = ActiveScreen::DailyChallenge { is_korean };
+                                        }
+                                    }
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::GameModeMenu;
+                                    app.menu_selected_idx = 0;
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
@@ -356,5 +761,30 @@ fn run_app<B: ratatui::backend::Backend>(
         
         // 실시간 타이머 흐름 업데이트
         app.update_elapsed_time();
+
+        // 게임 모드별 틱 처리
+        match app.active_screen {
+            ActiveScreen::TimeAttack { is_korean } => {
+                if app.is_time_attack_expired() {
+                    app.update_elapsed_time();
+                    app.save_session_record("게임-시간제한", if is_korean { "한글" } else { "영어" });
+                    app.active_screen = ActiveScreen::GameOver { game_type: GameType::TimeAttack, is_korean };
+                }
+            }
+            ActiveScreen::TypingRain { is_korean } => {
+                app.rain_screen_width = terminal.size()?.width;
+                app.rain_screen_height = terminal.size()?.height.saturating_sub(10);
+                app.tick_rain();
+                if app.game_mode_lives == 0 {
+                    app.update_elapsed_time();
+                    app.save_session_record("게임-타자레인", if is_korean { "한글" } else { "영어" });
+                    app.active_screen = ActiveScreen::GameOver { game_type: GameType::TypingRain, is_korean };
+                }
+            }
+            ActiveScreen::FlashTyping { .. } => {
+                app.check_flash_visibility();
+            }
+            _ => {}
+        }
     }
 }

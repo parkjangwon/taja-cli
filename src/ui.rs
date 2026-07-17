@@ -1,13 +1,13 @@
 pub mod keyboard;
 
-use crate::app::{App, ActiveScreen};
+use crate::app::{App, ActiveScreen, GameType};
 use crate::ui::keyboard::KeyboardWidget;
 use crate::hangeul;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Gauge, Paragraph, Wrap},
     Frame,
 };
 
@@ -36,6 +36,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         ActiveScreen::SentencePracticeMenu => draw_sentence_menu(f, chunks[1], app),
         ActiveScreen::SentencePractice { is_korean } => draw_sentence_practice(f, chunks[1], app, *is_korean),
         ActiveScreen::Stats => draw_stats(f, chunks[1], app),
+        // 게임 모드 화면들
+        ActiveScreen::GameModeMenu => draw_game_mode_menu(f, chunks[1], app),
+        ActiveScreen::GameLanguageMenu { game_type } => draw_game_language_menu(f, chunks[1], app, *game_type),
+        ActiveScreen::GameTimeSelect { is_korean } => draw_time_select_menu(f, chunks[1], app, *is_korean),
+        ActiveScreen::TimeAttack { is_korean } => draw_time_attack(f, chunks[1], app, *is_korean),
+        ActiveScreen::Survival { is_korean } => draw_survival(f, chunks[1], app, *is_korean),
+        ActiveScreen::TypingRain { is_korean } => draw_typing_rain(f, chunks[1], app, *is_korean),
+        ActiveScreen::FlashTyping { is_korean } => draw_flash_typing(f, chunks[1], app, *is_korean),
+        ActiveScreen::DailyChallenge { is_korean } => draw_daily_challenge(f, chunks[1], app, *is_korean),
+        ActiveScreen::GameOver { game_type, is_korean } => draw_game_over(f, chunks[1], app, *game_type, *is_korean),
     }
 
     // 4. 푸터 그리기
@@ -89,13 +99,31 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             " [Esc]: 연습 중단  [Enter]: 줄 바꿈 (다음 문장)  [아무 키나 입력해 시작] "
         }
         ActiveScreen::Stats => " [Esc]: 메인 메뉴로 돌아가기 ",
+        // 게임 모드 푸터
+        ActiveScreen::GameModeMenu | ActiveScreen::GameLanguageMenu { .. } | ActiveScreen::GameTimeSelect { .. } => {
+            " [↑/↓]: 이동  [Enter]: 선택  [Esc]: 이전 화면 "
+        }
+        ActiveScreen::TimeAttack { .. } | ActiveScreen::Survival { .. } | ActiveScreen::DailyChallenge { .. } => {
+            " [Esc]: 게임 중단  [Space/Enter]: 단어 제출 "
+        }
+        ActiveScreen::TypingRain { .. } => {
+            " [Esc]: 게임 중단  타이핑으로 단어 파괴! "
+        }
+        ActiveScreen::FlashTyping { .. } => {
+            " [Esc]: 게임 중단  [Enter]: 정답 제출 / 다음 라운드 "
+        }
+        ActiveScreen::GameOver { .. } => {
+            " [Enter]: 다시 하기  [Esc]: 게임 모드 메뉴로 "
+        }
     };
 
     footer_spans.push(Span::styled(guide_text, Style::default().fg(Color::Gray)));
 
     // 타자 연습 중일 때 푸터에 콤팩트한 붉은색 경고 추가
     match app.active_screen {
-        ActiveScreen::FingerPractice { .. } | ActiveScreen::WordPractice { .. } | ActiveScreen::SentencePractice { .. } => {
+        ActiveScreen::FingerPractice { .. } | ActiveScreen::WordPractice { .. } | ActiveScreen::SentencePractice { .. }
+        | ActiveScreen::TimeAttack { .. } | ActiveScreen::Survival { .. } | ActiveScreen::TypingRain { .. }
+        | ActiveScreen::FlashTyping { .. } | ActiveScreen::DailyChallenge { .. } => {
             footer_spans.push(Span::styled(
                 " (⚠️ OS 입력기: 영문 필수) ",
                 Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
@@ -115,7 +143,8 @@ fn draw_main_menu(f: &mut Frame, area: Rect, app: &App) {
         "2. 낱말 연습 (Word Practice)",
         "3. 문장 연습 (Sentence Practice)",
         "4. 통계 및 기록 분석 (Statistics)",
-        "5. 종료 (Exit)",
+        "5. 🎮 게임 모드 (Game Mode)",
+        "6. 종료 (Exit)",
     ];
 
     let layout = Layout::default()
@@ -767,4 +796,777 @@ fn draw_stats(f: &mut Frame, area: Rect, app: &App) {
         .block(error_block)
         .wrap(Wrap { trim: true });
     f.render_widget(error_p, main_layout[1]);
+}
+
+// ════════════════════════════════════════════════════════
+// 게임 모드 UI 렌더링 함수들
+// ════════════════════════════════════════════════════════
+
+// --- 게임 모드 선택 메뉴 ---
+fn draw_game_mode_menu(f: &mut Frame, area: Rect, app: &App) {
+    let menu_items = vec![
+        "1. ⏱️  시간 제한 모드 (Time Attack)",
+        "2. ❤️  서바이벌 모드 (Survival)",
+        "3. 🌧️  타자 레인 (Typing Rain)",
+        "4. 👻 플래시 타이핑 (Flash Typing)",
+        "5. 🏆 데일리 챌린지 (Daily Challenge)",
+    ];
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(" 🎮 GAME MODE ")
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "게임 모드를 선택하세요!",
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    for (idx, item) in menu_items.iter().enumerate() {
+        if idx == app.menu_selected_idx {
+            lines.push(Line::from(Span::styled(
+                format!(" ➔ {}", item),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("   {}", item),
+                Style::default().fg(Color::White),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, layout[1]);
+}
+
+// --- 게임 언어 선택 메뉴 ---
+fn draw_game_language_menu(f: &mut Frame, area: Rect, app: &App, game_type: GameType) {
+    let type_name = match game_type {
+        GameType::TimeAttack => "⏱️ 시간 제한 모드",
+        GameType::Survival => "❤️ 서바이벌 모드",
+        GameType::TypingRain => "🌧️ 타자 레인",
+        GameType::FlashTyping => "👻 플래시 타이핑",
+        GameType::DailyChallenge => "🏆 데일리 챌린지",
+    };
+
+    let options = vec![
+        "1. 한글 (Korean)",
+        "2. 영어 (English)",
+    ];
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" {} ", type_name))
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from("언어를 선택하세요."));
+    lines.push(Line::from(""));
+
+    for (idx, item) in options.iter().enumerate() {
+        if idx == app.menu_selected_idx {
+            lines.push(Line::from(Span::styled(
+                format!(" ➔ {}", item),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("   {}", item),
+                Style::default().fg(Color::White),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(Color::White))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    let vertical_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+        ])
+        .split(layout[1]);
+
+    f.render_widget(paragraph, vertical_layout[1]);
+}
+
+// --- 시간 선택 메뉴 (Time Attack 전용) ---
+fn draw_time_select_menu(f: &mut Frame, area: Rect, app: &App, _is_korean: bool) {
+    let options = vec![
+        "1. 30초 (30 seconds)",
+        "2. 60초 (60 seconds)",
+        "3. 120초 (120 seconds)",
+    ];
+
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+            Constraint::Percentage(25),
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(" ⏱️ 시간 설정 ")
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from("제한 시간을 선택하세요."));
+    lines.push(Line::from(""));
+
+    for (idx, item) in options.iter().enumerate() {
+        if idx == app.menu_selected_idx {
+            lines.push(Line::from(Span::styled(
+                format!(" ➔ {}", item),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(Span::styled(
+                format!("   {}", item),
+                Style::default().fg(Color::White),
+            )));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .style(Style::default().fg(Color::White))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    let vertical_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(40),
+            Constraint::Percentage(30),
+        ])
+        .split(layout[1]);
+
+    f.render_widget(paragraph, vertical_layout[1]);
+}
+
+// --- 시간 제한 모드 (Time Attack) 렌더링 ---
+fn draw_time_attack(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
+    let main_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // 타이머 바
+            Constraint::Min(8),    // 메인 영역
+        ])
+        .split(area);
+
+    // 1. 타이머 바
+    let remaining = app.time_attack_remaining_secs();
+    let total = app.game_time_limit_secs as f64;
+    let ratio = (remaining / total).clamp(0.0, 1.0);
+    let timer_color = if ratio > 0.5 {
+        Color::Green
+    } else if ratio > 0.2 {
+        Color::Yellow
+    } else {
+        Color::Red
+    };
+
+    let gauge = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(timer_color)).title(" ⏱️ 남은 시간 "))
+        .gauge_style(Style::default().fg(timer_color))
+        .ratio(ratio)
+        .label(format!("{:.1}초", remaining));
+    f.render_widget(gauge, main_layout[0]);
+
+    // 2. 메인 게임 영역
+    let content_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(main_layout[1]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" ⏱️ 시간 제한 모드 ({}) ", if is_korean { "한글" } else { "영어" }))
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let typed = app.input_automata.get_text();
+    let current_word = &app.target_text;
+
+    // 단어 정오 렌더링
+    let mut text_spans = Vec::new();
+    for (i, target_char) in current_word.chars().enumerate() {
+        let typed_char_opt = typed.chars().nth(i);
+        match typed_char_opt {
+            Some(tc) => {
+                if hangeul::is_typing_valid(tc, target_char) {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
+                } else {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
+                }
+            }
+            None => {
+                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
+            }
+        }
+    }
+
+    // 콤보 표시
+    let combo_text = if app.game_mode_combo > 1 {
+        format!("🔥 {}콤보! (x{} 배수)", app.game_mode_combo, std::cmp::min(app.game_mode_combo, 5))
+    } else {
+        String::new()
+    };
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("🎯 점수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_score), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  ✅ 완료: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}개", app.game_words_correct), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+    if !combo_text.is_empty() {
+        lines.push(Line::from(Span::styled(
+            combo_text,
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" 제시 단어: ", Style::default().fg(Color::Gray)),
+        Span::styled(current_word, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(text_spans));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, content_layout[1]);
+}
+
+// --- 서바이벌 모드 렌더링 ---
+fn draw_survival(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" ❤️ 서바이벌 ({}) ", if is_korean { "한글" } else { "영어" }))
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Red));
+
+    let typed = app.input_automata.get_text();
+    let current_word = &app.target_text;
+
+    // 단어 정오 렌더링
+    let mut text_spans = Vec::new();
+    for (i, target_char) in current_word.chars().enumerate() {
+        let typed_char_opt = typed.chars().nth(i);
+        match typed_char_opt {
+            Some(tc) => {
+                if hangeul::is_typing_valid(tc, target_char) {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
+                } else {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
+                }
+            }
+            None => {
+                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
+            }
+        }
+    }
+
+    // 라이프 표시
+    let lives_str: String = "♥".repeat(app.game_mode_lives as usize) + &"♡".repeat(5usize.saturating_sub(app.game_mode_lives as usize));
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        lives_str,
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("🎯 점수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_score), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  📝 라운드: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_round + 1), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  🔥 콤보: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_combo), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+    // 난이도 힌트
+    let difficulty = 1 + app.game_mode_round / 10;
+    lines.push(Line::from(Span::styled(
+        format!("난이도: ★{}", "★".repeat(std::cmp::min(difficulty, 5))),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" 제시 단어: ", Style::default().fg(Color::Gray)),
+        Span::styled(current_word, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(text_spans));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, layout[1]);
+}
+
+// --- 타자 레인 모드 렌더링 ---
+fn draw_typing_rain(f: &mut Frame, area: Rect, app: &App, _is_korean: bool) {
+    let main_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // 상태 바
+            Constraint::Min(8),    // 레인 영역
+            Constraint::Length(3), // 입력 바
+        ])
+        .split(area);
+
+    // 1. 상태 바
+    let lives_str: String = "♥".repeat(app.game_mode_lives as usize) + &"♡".repeat(5usize.saturating_sub(app.game_mode_lives as usize));
+    let status_line = Line::from(vec![
+        Span::styled(format!(" {} ", lives_str), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  🎯 점수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_score), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  💀 파괴: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}개", app.game_words_correct), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+    ]);
+    let status_block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let status_p = Paragraph::new(status_line).block(status_block);
+    f.render_widget(status_p, main_layout[0]);
+
+    // 2. 레인 영역 - 간소화된 버전 (Paragraph 기반)
+    let rain_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" 🌧️ 타자 레인 ")
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Blue));
+
+    let rain_height = main_layout[1].height.saturating_sub(2) as usize;
+    let rain_width = main_layout[1].width.saturating_sub(2) as usize;
+
+    // 각 줄을 구성
+    let mut rain_lines: Vec<Line> = Vec::new();
+    for row in 0..rain_height {
+        let mut row_spans = Vec::new();
+        // 이 줄에 표시할 단어들 찾기
+        let mut line_chars: Vec<(usize, char, Style)> = Vec::new();
+
+        for (idx, word) in app.rain_words.iter().enumerate() {
+            if word.destroyed {
+                continue;
+            }
+            let word_row = word.row as usize;
+            if word_row != row {
+                continue;
+            }
+            let col = word.column as usize;
+            for (ci, ch) in word.text.chars().enumerate() {
+                let pos = col + ci;
+                if pos < rain_width {
+                    let style = if word.active {
+                        if ci < word.typed_len {
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        } else if ci == word.typed_len {
+                            Style::default().fg(Color::Yellow).bg(Color::DarkGray).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        }
+                    } else if app.rain_active_idx == Some(idx) {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        // 바닥에 가까울수록 빨간색
+                        if word.row > (rain_height as f32 * 0.7) {
+                            Style::default().fg(Color::Red)
+                        } else {
+                            Style::default().fg(Color::White)
+                        }
+                    };
+                    line_chars.push((pos, ch, style));
+                }
+            }
+        }
+
+        if line_chars.is_empty() {
+            rain_lines.push(Line::from(""));
+        } else {
+            // 위치순 정렬
+            line_chars.sort_by_key(|(pos, _, _)| *pos);
+            let mut current_pos = 0;
+            for (pos, ch, style) in line_chars {
+                if pos > current_pos {
+                    row_spans.push(Span::raw(" ".repeat(pos - current_pos)));
+                }
+                row_spans.push(Span::styled(ch.to_string(), style));
+                current_pos = pos + 1;
+            }
+            rain_lines.push(Line::from(row_spans));
+        }
+    }
+
+    let rain_p = Paragraph::new(rain_lines).block(rain_block);
+    f.render_widget(rain_p, main_layout[1]);
+
+    // 3. 입력 바
+    let typed = app.input_automata.get_text();
+    let input_block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" 입력 ")
+        .border_style(Style::default().fg(Color::Yellow));
+    let input_p = Paragraph::new(Line::from(Span::styled(
+        format!(" ▸ {}", typed),
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    )))
+    .block(input_block);
+    f.render_widget(input_p, main_layout[2]);
+}
+
+// --- 플래시 타이핑 모드 렌더링 ---
+fn draw_flash_typing(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" 👻 플래시 타이핑 ({}) ", if is_korean { "한글" } else { "영어" }))
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Magenta));
+
+    let typed = app.input_automata.get_text();
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+
+    // 상태 정보
+    lines.push(Line::from(vec![
+        Span::styled("📝 라운드: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}/{}", app.game_mode_round + 1, app.word_list.len()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  🎯 점수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_score), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled("  |  ⚡ 표시시간: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}ms", app.flash_duration_ms), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+
+    if app.flash_answer_shown {
+        // 정답/오답 표시
+        match app.flash_was_correct {
+            Some(true) => {
+                lines.push(Line::from(Span::styled(
+                    "✅ 정답! 잘했습니다!",
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                )));
+            }
+            Some(false) => {
+                lines.push(Line::from(Span::styled(
+                    "❌ 오답!",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(vec![
+                    Span::styled(" 정답: ", Style::default().fg(Color::Gray)),
+                    Span::styled(&app.target_text, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("  |  입력: ", Style::default().fg(Color::Gray)),
+                    Span::styled(&typed, Style::default().fg(Color::Red)),
+                ]));
+            }
+            None => {}
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "[Enter] 다음 라운드로",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else if app.flash_visible {
+        // 단어 표시 중
+        lines.push(Line::from(Span::styled(
+            "👀 이 단어를 기억하세요!",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            &app.target_text,
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )));
+    } else {
+        // 단어 숨김 - 입력 모드
+        lines.push(Line::from(Span::styled(
+            "💭 기억나는 단어를 입력하세요!",
+            Style::default().fg(Color::Yellow),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "????",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray)),
+            Span::styled(&typed, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, layout[1]);
+}
+
+// --- 데일리 챌린지 모드 렌더링 ---
+fn draw_daily_challenge(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(area);
+
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" 🏆 데일리 챌린지 ({}) - {} ", if is_korean { "한글" } else { "영어" }, today))
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let typed = app.input_automata.get_text();
+    let current_word = &app.target_text;
+
+    // 단어 정오 렌더링
+    let mut text_spans = Vec::new();
+    for (i, target_char) in current_word.chars().enumerate() {
+        let typed_char_opt = typed.chars().nth(i);
+        match typed_char_opt {
+            Some(tc) => {
+                if hangeul::is_typing_valid(tc, target_char) {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
+                } else {
+                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
+                }
+            }
+            None => {
+                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
+            }
+        }
+    }
+
+    // 진행 바 문자열
+    let progress = format!(
+        "{}{}",
+        "█".repeat(app.current_word_idx),
+        "░".repeat(app.word_list.len().saturating_sub(app.current_word_idx))
+    );
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("📊 진행: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}/{}", app.current_word_idx + 1, app.word_list.len()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled("  ", Style::default()),
+        Span::styled(progress, Style::default().fg(Color::Green)),
+    ]));
+    if let Some(best) = app.daily_best_score {
+        lines.push(Line::from(Span::styled(
+            format!("🏅 오늘의 최고 점수: {}", best),
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(" 제시 단어: ", Style::default().fg(Color::Gray)),
+        Span::styled(current_word, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray)),
+    ]));
+    lines.push(Line::from(text_spans));
+    lines.push(Line::from(""));
+    lines.push(make_stats_bar(app));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, layout[1]);
+}
+
+// --- 게임 오버 화면 렌더링 ---
+fn draw_game_over(f: &mut Frame, area: Rect, app: &App, game_type: GameType, _is_korean: bool) {
+    let layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(area);
+
+    let type_name = match game_type {
+        GameType::TimeAttack => "⏱️ 시간 제한 모드",
+        GameType::Survival => "❤️ 서바이벌 모드",
+        GameType::TypingRain => "🌧️ 타자 레인",
+        GameType::FlashTyping => "👻 플래시 타이핑",
+        GameType::DailyChallenge => "🏆 데일리 챌린지",
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .title(format!(" {} - 결과 ", type_name))
+        .title_alignment(ratatui::layout::Alignment::Center)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "🏁 게임 종료!",
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+
+    // 점수
+    lines.push(Line::from(vec![
+        Span::styled("🎯 최종 점수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_score), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+
+    // 완료 단어 수
+    lines.push(Line::from(vec![
+        Span::styled("✅ 완료 단어: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{} / {}", app.game_words_correct, app.game_words_total), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+    ]));
+
+    // 최대 콤보
+    lines.push(Line::from(vec![
+        Span::styled("🔥 최대 콤보: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}", app.game_mode_max_combo), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+    ]));
+
+    // CPM
+    lines.push(Line::from(vec![
+        Span::styled("⌨️ 분당타수: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{} CPM", app.get_cpm()), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    ]));
+
+    // 정확도
+    lines.push(Line::from(vec![
+        Span::styled("📊 정확도: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{:.1}%", app.get_accuracy()), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+    ]));
+
+    // 경과 시간
+    lines.push(Line::from(vec![
+        Span::styled("⏱️ 경과 시간: ", Style::default().fg(Color::Gray)),
+        Span::styled(format!("{}초", app.elapsed_time.as_secs()), Style::default().fg(Color::White)),
+    ]));
+
+    // 플래시 타이핑 전용 통계
+    if game_type == GameType::FlashTyping && !app.flash_response_times.is_empty() {
+        let avg_time: f64 = app.flash_response_times.iter().sum::<f64>() / app.flash_response_times.len() as f64;
+        lines.push(Line::from(vec![
+            Span::styled("⚡ 평균 응답 시간: ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{:.2}초", avg_time), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+
+    // 데일리 챌린지 전용
+    if game_type == GameType::DailyChallenge {
+        if let Some(best) = app.daily_best_score {
+            lines.push(Line::from(vec![
+                Span::styled("🏅 오늘의 최고 점수: ", Style::default().fg(Color::Gray)),
+                Span::styled(format!("{}", best), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "[Enter] 다시 하기  |  [Esc] 메뉴로 돌아가기",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(paragraph, layout[1]);
 }

@@ -123,3 +123,31 @@ jobs:
             taja-cli-windows-x64.zip
           draft: false
           prerelease: false
+
+  publish-npm:
+    name: Publish to npm
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Sync package.json version with release tag
+        working-directory: npm
+        run: |
+          TAG=${{ github.ref_name }}
+          VERSION=${TAG#v}
+          npm version $VERSION --no-git-tag-version
+          echo "Synced npm version to: $VERSION"
+
+      - name: Publish to npm registry
+        working-directory: npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

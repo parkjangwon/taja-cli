@@ -1,0 +1,360 @@
+mod hangeul;
+mod storage;
+mod app;
+mod ui;
+
+use app::{App, ActiveScreen};
+use crossterm::{
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{backend::CrosstermBackend, terminal::Terminal};
+use std::{io, time::Duration};
+
+fn main() -> Result<(), io::Error> {
+    // 1. 터미널 환경 설정 (Raw Mode 활성화 및 Alternate Screen 진입)
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // 2. 앱 상태 생성 및 실행
+    let mut app = App::new();
+    let res = run_app(&mut terminal, &mut app);
+
+    // 3. 터미널 복원 (오류 발생 시에도 복원)
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    if let Err(err) = res {
+        println!("Error: {:?}", err);
+    }
+
+    Ok(())
+}
+
+fn run_app<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+) -> io::Result<()> {
+    loop {
+        // UI 그리기
+        terminal.draw(|f| ui::draw(f, app))?;
+
+        // 100ms 폴링으로 키 이벤트가 없어도 실시간 통계(시간 경과) 업데이트
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match app.active_screen {
+                        ActiveScreen::MainMenu => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 4 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    match app.menu_selected_idx {
+                                        0 => {
+                                            app.active_screen = ActiveScreen::FingerPracticeMenu;
+                                            app.menu_selected_idx = 0;
+                                        }
+                                        1 => {
+                                            app.active_screen = ActiveScreen::WordPracticeMenu;
+                                            app.menu_selected_idx = 0;
+                                        }
+                                        2 => {
+                                            app.active_screen = ActiveScreen::SentencePracticeMenu;
+                                            app.menu_selected_idx = 0;
+                                        }
+                                        3 => {
+                                            app.active_screen = ActiveScreen::Stats;
+                                            // 자주 틀리는 키 목록 캐시 갱신
+                                            app.cached_frequent_errors = app.storage.get_frequent_errors(10);
+                                        }
+                                        4 => return Ok(()), // 종료
+                                        _ => {}
+                                    }
+                                }
+                                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                                    return Ok(());
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::FingerPracticeMenu => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 1 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let is_korean = app.menu_selected_idx == 0;
+                                    app.active_screen = ActiveScreen::FingerPracticeLevelMenu { is_korean };
+                                    app.menu_selected_idx = 0;
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::MainMenu;
+                                    app.menu_selected_idx = 0;
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::FingerPracticeLevelMenu { is_korean } => {
+                            let max_idx = if is_korean { 5 } else { 4 }; // 한글 Level 1~6, 영어 Level 1~5
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < max_idx {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let level = app.menu_selected_idx + 1;
+                                    app.active_screen = ActiveScreen::FingerPractice { level, is_korean };
+                                    let target = App::get_finger_practice_target(level, is_korean);
+                                    app.start_practice_session(target);
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::FingerPracticeMenu;
+                                    app.menu_selected_idx = if is_korean { 0 } else { 1 };
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::FingerPractice { level, is_korean } => {
+                            app.ensure_timer_started();
+                            
+                            match key.code {
+                                KeyCode::Esc => {
+                                    // 자리 연습 중단, 메뉴로 백
+                                    app.active_screen = ActiveScreen::FingerPracticeLevelMenu { is_korean };
+                                    app.menu_selected_idx = level - 1;
+                                }
+                                KeyCode::Backspace => {
+                                    app.input_automata.backspace();
+                                }
+                                KeyCode::Char(c) => {
+                                    let current_pos = app.input_automata.get_text().chars().count();
+                                    let expected_chars: Vec<char> = app.target_text.chars().collect();
+                                    let expected_char = expected_chars.get(current_pos).copied();
+                                    
+                                    if current_pos < expected_chars.len() {
+                                        let ec = expected_char.unwrap();
+                                        
+                                        // 입력 처리
+                                        app.input_automata.push_char(c, expected_char);
+                                        
+                                        // 정오 판정
+                                        let typed_text = app.input_automata.get_text();
+                                        if let Some(new_typed_char) = typed_text.chars().nth(current_pos) {
+                                            if !hangeul::is_typing_valid(new_typed_char, ec) {
+                                                app.record_error(ec, c);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // 입력 완료 확인
+                                    let typed_text = app.input_automata.get_text();
+                                    let completed_len = hangeul::count_completed_chars(&typed_text, &app.target_text);
+                                    let expected_len = app.target_text.chars().count();
+                                    
+                                    if completed_len >= expected_len {
+                                        // 자리 연습은 바로 기록 저장
+                                        app.input_automata.commit_current();
+                                        app.update_elapsed_time();
+                                        
+                                        let lang_str = if is_korean { "한글" } else { "영어" };
+                                        app.save_session_record("자리연습", &format!("{} Level {}", lang_str, level));
+                                        
+                                        // 바로 다음 문장 세트 생성해서 계속 진행
+                                        let next_target = App::get_finger_practice_target(level, is_korean);
+                                        app.start_practice_session(next_target);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::WordPracticeMenu => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 1 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let is_korean = app.menu_selected_idx == 0;
+                                    app.active_screen = ActiveScreen::WordPractice { is_korean };
+                                    app.setup_word_practice(is_korean);
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::MainMenu;
+                                    app.menu_selected_idx = 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::WordPractice { is_korean } => {
+                            app.ensure_timer_started();
+                            
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::WordPracticeMenu;
+                                    app.menu_selected_idx = if is_korean { 0 } else { 1 };
+                                }
+                                KeyCode::Backspace => {
+                                    app.input_automata.backspace();
+                                }
+                                // 단어 단위 완료는 Space 또는 Enter
+                                KeyCode::Char(' ') | KeyCode::Enter => {
+                                    app.input_automata.commit_current();
+                                    let typed = app.input_automata.get_text();
+                                    
+                                    // 단어별 오타 검사
+                                    let expected = &app.target_text;
+                                    if typed.trim() != expected.trim() {
+                                        // 단어가 통째로 틀렸다면 마지막 글자를 오타로 기록
+                                        let last_exp = expected.chars().last().unwrap_or(' ');
+                                        let last_typ = typed.chars().last().unwrap_or(' ');
+                                        app.record_error(last_exp, last_typ);
+                                    }
+                                    
+                                    // 다음 단어로 전환
+                                    let has_next = app.next_word();
+                                    if !has_next {
+                                        // 낱말 연습 전체 완료 -> 저장
+                                        app.update_elapsed_time();
+                                        app.save_session_record("낱말연습", if is_korean { "한글" } else { "영어" });
+                                        app.active_screen = ActiveScreen::WordPracticeMenu;
+                                        app.menu_selected_idx = if is_korean { 0 } else { 1 };
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    let current_pos = app.input_automata.get_text().chars().count();
+                                    let expected_chars: Vec<char> = app.target_text.chars().collect();
+                                    let expected_char = expected_chars.get(current_pos).copied();
+                                    
+                                    app.input_automata.push_char(c, expected_char);
+                                    
+                                    // 실시간 오타 판정 (낱말 내 자모 비교)
+                                    if let Some(ec) = expected_char {
+                                        let typed_text = app.input_automata.get_text();
+                                        if let Some(new_typed_char) = typed_text.chars().nth(current_pos) {
+                                            if !hangeul::is_typing_valid(new_typed_char, ec) {
+                                                app.record_error(ec, c);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::SentencePracticeMenu => {
+                            match key.code {
+                                KeyCode::Up => {
+                                    app.menu_selected_idx = app.menu_selected_idx.saturating_sub(1);
+                                }
+                                KeyCode::Down => {
+                                    if app.menu_selected_idx < 1 {
+                                        app.menu_selected_idx += 1;
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    let is_korean = app.menu_selected_idx == 0;
+                                    app.active_screen = ActiveScreen::SentencePractice { is_korean };
+                                    app.setup_sentence_practice(is_korean);
+                                }
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::MainMenu;
+                                    app.menu_selected_idx = 2;
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::SentencePractice { is_korean } => {
+                            app.ensure_timer_started();
+                            
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.active_screen = ActiveScreen::SentencePracticeMenu;
+                                    app.menu_selected_idx = if is_korean { 0 } else { 1 };
+                                }
+                                KeyCode::Backspace => {
+                                    app.input_automata.backspace();
+                                }
+                                KeyCode::Enter => {
+                                    app.input_automata.commit_current();
+                                    let typed = app.input_automata.get_text();
+                                    let expected = &app.target_text;
+                                    
+                                    // 문장 오타 체크 (글자수 다른 만큼 오타 누적)
+                                    let exp_len = expected.chars().count();
+                                    let typ_len = typed.chars().count();
+                                    if typ_len < exp_len {
+                                        app.total_errors += exp_len - typ_len;
+                                    }
+                                    
+                                    // 다음 문장 전환
+                                    let has_next = app.next_sentence();
+                                    if !has_next {
+                                        // 문장 연습 전체 완료 -> 저장
+                                        app.update_elapsed_time();
+                                        app.save_session_record("문장연습", if is_korean { "한글" } else { "영어" });
+                                        app.active_screen = ActiveScreen::SentencePracticeMenu;
+                                        app.menu_selected_idx = if is_korean { 0 } else { 1 };
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    let current_pos = app.input_automata.get_text().chars().count();
+                                    let expected_chars: Vec<char> = app.target_text.chars().collect();
+                                    let expected_char = expected_chars.get(current_pos).copied();
+                                    
+                                    app.input_automata.push_char(c, expected_char);
+                                    
+                                    // 실시간 오타 판정
+                                    if let Some(ec) = expected_char {
+                                        let typed_text = app.input_automata.get_text();
+                                        if let Some(new_typed_char) = typed_text.chars().nth(current_pos) {
+                                            if !hangeul::is_typing_valid(new_typed_char, ec) {
+                                                app.record_error(ec, c);
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        ActiveScreen::Stats => {
+                            if key.code == KeyCode::Esc {
+                                app.active_screen = ActiveScreen::MainMenu;
+                                app.menu_selected_idx = 3;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 실시간 타이머 흐름 업데이트
+        app.update_elapsed_time();
+    }
+}

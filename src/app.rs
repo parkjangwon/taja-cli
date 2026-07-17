@@ -118,6 +118,10 @@ pub struct App {
     pub long_text_title: String,
     pub long_text_cpm_history: Vec<usize>,
     pub long_text_selected_idx: usize,
+    /// 마지막으로 CPM 히스토리를 기록한 경과 초 (중복 샘플 방지)
+    pub long_text_last_cpm_sec: u64,
+    /// 타자 레인 난이도 가속을 마지막으로 적용한 라운드
+    pub rain_last_speed_round: usize,
 }
 
 impl App {
@@ -172,7 +176,25 @@ impl App {
             long_text_title: String::new(),
             long_text_cpm_history: Vec::new(),
             long_text_selected_idx: 0,
+            long_text_last_cpm_sec: 0,
+            rain_last_speed_round: 0,
         }
+    }
+
+    /// 게임 모드 공통: 키 입력 + 자모 접두사 기반 오타 판정
+    pub fn push_game_char(&mut self, c: char) {
+        let idx = self.input_automata.expected_char_index();
+        let expected_char = self.target_text.chars().nth(idx);
+        self.input_automata.push_char(c, expected_char);
+        let typed = self.input_automata.get_text();
+        if !crate::hangeul::is_input_prefix_of(&typed, &self.target_text) {
+            self.record_error(expected_char.unwrap_or(c), c);
+        }
+    }
+
+    /// 목표 텍스트를 정확히 모두 입력했는지 (자모 완전 일치)
+    pub fn is_target_fully_typed(&self) -> bool {
+        crate::hangeul::is_input_exact_match(&self.input_automata.get_text(), &self.target_text)
     }
 
     /// 현재 target_text 에 따라 오토마타의 모드(raw_jamo_mode, english_mode)를 갱신
@@ -792,6 +814,8 @@ impl App {
         self.long_text_current_para_idx = 0;
         self.long_text_title.clear();
         self.long_text_cpm_history.clear();
+        self.long_text_last_cpm_sec = 0;
+        self.rain_last_speed_round = 0;
         self.start_time = None;
         self.elapsed_time = Duration::default();
         self.accumulated_strokes = 0;
@@ -889,17 +913,30 @@ impl App {
         }
     }
 
-    /// 시간 제한 모드에서 다음 단어로 넘어가기 (콤보 + 점수 처리)
-    pub fn time_attack_next_word(&mut self) -> bool {
-        self.game_mode_combo += 1;
-        if self.game_mode_combo > self.game_mode_max_combo {
-            self.game_mode_max_combo = self.game_mode_combo;
-        }
-        // 점수 = 콤보 배수 (최대 5x)
-        let multiplier = std::cmp::min(self.game_mode_combo, 5);
-        self.game_mode_score += 10 * multiplier;
-        self.game_words_correct += 1;
+    /// 현재 입력이 목표와 일치하는지 (커밋 후 판정)
+    pub fn is_current_word_success(&mut self) -> bool {
+        self.input_automata.commit_current();
+        crate::hangeul::is_input_exact_match(
+            self.input_automata.get_text().trim(),
+            self.target_text.trim(),
+        )
+    }
+
+    /// 시간 제한 모드에서 다음 단어로 넘어가기 (성공 여부에 따라 콤보/점수 분기)
+    pub fn time_attack_next_word(&mut self, success: bool) -> bool {
         self.game_words_total += 1;
+        if success {
+            self.game_mode_combo += 1;
+            if self.game_mode_combo > self.game_mode_max_combo {
+                self.game_mode_max_combo = self.game_mode_combo;
+            }
+            // 점수 = 콤보 배수 (최대 5x)
+            let multiplier = std::cmp::min(self.game_mode_combo, 5);
+            self.game_mode_score += 10 * multiplier;
+            self.game_words_correct += 1;
+        } else {
+            self.game_mode_combo = 0;
+        }
         self.accumulated_strokes += self.input_automata.get_strokes();
 
         self.current_word_idx += 1;
@@ -1050,10 +1087,12 @@ impl App {
         for i in lost_indices {
             self.rain_words[i].destroyed = true;
             self.game_mode_lives = self.game_mode_lives.saturating_sub(1);
+            self.game_mode_combo = 0;
             // 활성 단어가 바닥에 닿으면 활성 해제
             if self.rain_active_idx == Some(i) {
                 self.rain_active_idx = None;
                 self.input_automata.clear();
+                self.target_text.clear();
             }
         }
 
@@ -1065,9 +1104,34 @@ impl App {
             self.spawn_rain_word();
         }
 
-        // 난이도 상승: 일정 라운드마다 틱 속도 증가
-        if self.game_mode_round > 0 && self.game_mode_round % 10 == 0 {
-            self.rain_tick_ms = std::cmp::max(60, self.rain_tick_ms.saturating_sub(5));
+        // 난이도 상승: 10라운드마다 한 번만 틱 간격 단축 (매 틱 가속 버그 방지)
+        if self.game_mode_round > 0
+            && self.game_mode_round % 10 == 0
+            && self.rain_last_speed_round != self.game_mode_round
+        {
+            self.rain_last_speed_round = self.game_mode_round;
+            self.rain_tick_ms = std::cmp::max(60, self.rain_tick_ms.saturating_sub(10));
+        }
+    }
+
+    /// 타자 레인: 활성 단어 입력 진행도(완전히 맞은 글자 수) 갱신
+    pub fn update_rain_typed_progress(&mut self) {
+        if let Some(idx) = self.rain_active_idx {
+            let typed = self.input_automata.get_text();
+            let target = &self.rain_words[idx].text;
+            self.rain_words[idx].typed_len = crate::hangeul::fully_matched_chars(&typed, target);
+        }
+    }
+
+    /// 타자 레인: 활성 단어가 정확히 완성되었는지
+    pub fn is_rain_word_complete(&self) -> bool {
+        if let Some(idx) = self.rain_active_idx {
+            crate::hangeul::is_input_exact_match(
+                &self.input_automata.get_text(),
+                &self.rain_words[idx].text,
+            )
+        } else {
+            false
         }
     }
 
@@ -1103,7 +1167,8 @@ impl App {
         self.input_automata.commit_current();
         let typed = self.input_automata.get_text();
         let expected = &self.target_text;
-        let correct = typed.trim() == expected.trim();
+        // 자모 완전 일치 (단순 문자열 비교는 정규화 차이에 취약할 수 있음)
+        let correct = crate::hangeul::is_input_exact_match(typed.trim(), expected.trim());
         self.flash_was_correct = Some(correct);
         self.flash_answer_shown = true;
         self.game_words_total += 1;
@@ -1257,7 +1322,7 @@ impl App {
         self.game_words_total += 1;
 
         let typed = self.input_automata.get_text();
-        if typed.trim() == self.target_text.trim() {
+        if crate::hangeul::is_input_exact_match(typed.trim(), self.target_text.trim()) {
             self.game_words_correct += 1;
             self.game_mode_combo += 1;
             if self.game_mode_combo > self.game_mode_max_combo {
@@ -1404,8 +1469,14 @@ I shall be telling this with a sigh somewhere ages and ages hence: Two roads div
         true
     }
 
-    /// 실시간 CPM 추이 기록용 헬퍼 (매 초마다 호출하여 추이 배열에 저장)
+    /// 실시간 CPM 추이 기록용 헬퍼 (경과 초가 바뀔 때 1회만 샘플)
     pub fn record_cpm_history(&mut self) {
+        let sec = self.elapsed_time.as_secs();
+        if sec == 0 || sec == self.long_text_last_cpm_sec {
+            return;
+        }
+        self.long_text_last_cpm_sec = sec;
+
         let current_cpm = self.get_cpm();
         if current_cpm > 0 {
             self.long_text_cpm_history.push(current_cpm);

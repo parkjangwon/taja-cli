@@ -54,6 +54,44 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_footer(f, chunks[2], app);
 }
 
+/// 게임 모드용: 자모 접두사 기반 정오 하이라이트 Span 생성
+fn game_typed_spans(typed: &str, target: &str) -> Vec<Span<'static>> {
+    let prefix_ok = hangeul::is_input_prefix_of(typed, target);
+    let matched = hangeul::fully_matched_chars(typed, target);
+    let typed_char_count = typed.chars().count();
+    let mut text_spans = Vec::new();
+
+    for (i, target_char) in target.chars().enumerate() {
+        if i < matched {
+            text_spans.push(Span::styled(
+                target_char.to_string(),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ));
+        } else if prefix_ok && i == matched && typed_char_count > matched {
+            text_spans.push(Span::styled(
+                target_char.to_string(),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if !prefix_ok && i < typed_char_count {
+            text_spans.push(Span::styled(
+                target_char.to_string(),
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::UNDERLINED),
+            ));
+        } else {
+            text_spans.push(Span::styled(
+                target_char.to_string(),
+                Style::default().fg(Color::White),
+            ));
+        }
+    }
+    text_spans
+}
+
 fn draw_header(f: &mut Frame, area: Rect) {
     let header_block = Block::default()
         .borders(Borders::ALL)
@@ -1046,24 +1084,7 @@ fn draw_time_attack(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
 
     let typed = app.input_automata.get_text();
     let current_word = &app.target_text;
-
-    // 단어 정오 렌더링
-    let mut text_spans = Vec::new();
-    for (i, target_char) in current_word.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        match typed_char_opt {
-            Some(tc) => {
-                if hangeul::is_typing_valid(tc, target_char) {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
-                } else {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
-                }
-            }
-            None => {
-                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
-            }
-        }
-    }
+    let text_spans = game_typed_spans(&typed, current_word);
 
     // 콤보 표시
     let combo_text = if app.game_mode_combo > 1 {
@@ -1090,7 +1111,7 @@ fn draw_time_attack(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled(" 제시 단어: ", Style::default().fg(Color::Gray)),
-        Span::styled(current_word, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(current_word.clone(), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
     ]));
     lines.push(Line::from(vec![
         Span::styled(" 나의 입력: ", Style::default().fg(Color::Gray)),
@@ -1124,24 +1145,7 @@ fn draw_survival(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
 
     let typed = app.input_automata.get_text();
     let current_word = &app.target_text;
-
-    // 단어 정오 렌더링
-    let mut text_spans = Vec::new();
-    for (i, target_char) in current_word.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        match typed_char_opt {
-            Some(tc) => {
-                if hangeul::is_typing_valid(tc, target_char) {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
-                } else {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
-                }
-            }
-            None => {
-                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
-            }
-        }
-    }
+    let text_spans = game_typed_spans(&typed, current_word);
 
     // 라이프 표시
     let lives_str: String = "♥".repeat(app.game_mode_lives as usize) + &"♡".repeat(5usize.saturating_sub(app.game_mode_lives as usize));
@@ -1419,24 +1423,7 @@ fn draw_daily_challenge(f: &mut Frame, area: Rect, app: &App, is_korean: bool) {
 
     let typed = app.input_automata.get_text();
     let current_word = &app.target_text;
-
-    // 단어 정오 렌더링
-    let mut text_spans = Vec::new();
-    for (i, target_char) in current_word.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        match typed_char_opt {
-            Some(tc) => {
-                if hangeul::is_typing_valid(tc, target_char) {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
-                } else {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
-                }
-            }
-            None => {
-                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
-            }
-        }
-    }
+    let text_spans = game_typed_spans(&typed, current_word);
 
     // 진행 바 문자열
     let progress = format!(
@@ -1687,26 +1674,14 @@ fn draw_long_text_race(f: &mut Frame, area: Rect, app: &App, _is_korean: bool, _
         body_lines.push(Line::from(""));
     }
 
-    // 현재 타이핑 중인 문단 (정오 표시 포함)
+    // 현재 타이핑 중인 문단 (자모 접두사 기반 정오 표시)
     let current_word = &app.target_text;
     let typed = app.input_automata.get_text();
-    let mut text_spans = vec![Span::styled(" ➔ ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))];
-
-    for (i, target_char) in current_word.chars().enumerate() {
-        let typed_char_opt = typed.chars().nth(i);
-        match typed_char_opt {
-            Some(tc) => {
-                if hangeul::is_typing_valid(tc, target_char) {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)));
-                } else {
-                    text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::Red).add_modifier(Modifier::UNDERLINED)));
-                }
-            }
-            None => {
-                text_spans.push(Span::styled(target_char.to_string(), Style::default().fg(Color::White)));
-            }
-        }
-    }
+    let mut text_spans = vec![Span::styled(
+        " ➔ ",
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    )];
+    text_spans.extend(game_typed_spans(&typed, current_word));
     body_lines.push(Line::from(text_spans));
     body_lines.push(Line::from(""));
 

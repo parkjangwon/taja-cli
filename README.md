@@ -40,28 +40,70 @@
 
 ## 🚀 설치 및 실행 방법
 
-### 요구 사항
-* **NPM 방식 (권장)**: [Node.js](https://nodejs.org/) (버전 12 이상)
-* **Cargo 방식**: [Rust & Cargo](https://rustup.rs/)
-* 공통: 터미널 에뮬레이터 (macOS Terminal, iTerm2, Alacritty, Windows Terminal 등)
+Rust를 설치하지 않아도 **npm**으로 바로 쓸 수 있습니다. (권장)
 
-### 1. NPM으로 설치 (가장 간편)
-터미널에서 아래 명령어로 즉시 전역 설치 및 실행할 수 있습니다:
+### 요구 사항
+
+| 방식 | 필요한 것 |
+|------|-----------|
+| **npm (권장)** | [Node.js](https://nodejs.org/) 12 이상 |
+| **Cargo (소스 빌드)** | [Rust & Cargo](https://rustup.rs/) |
+| 공통 | 터미널 (macOS Terminal, iTerm2, Alacritty, Windows Terminal 등) |
+
+### 1. npm으로 설치 (권장)
+
+전역 설치 후 `taja` 명령으로 실행합니다.
+
 ```bash
 npm install -g taja-cli
 taja
 ```
 
-### 2. Cargo로 빌드 및 실행 (소스코드 빌드)
-1. 저장소를 클론합니다:
-   ```bash
-   git clone https://github.com/parkjangwon/taja-cli.git
-   cd taja-cli
-   ```
-2. Cargo 명령어로 실행합니다:
-   ```bash
-   cargo run --release
-   ```
+설치만 하고 한 번 실행해 보려면:
+
+```bash
+npx taja-cli
+```
+
+#### 지원 플랫폼
+
+첫 실행 시 OS/아키텍처에 맞는 바이너리를 [GitHub Releases](https://github.com/parkjangwon/taja-cli/releases)에서 받아 캐시합니다. Rust 툴체인은 필요 없습니다.
+
+| OS | 아키텍처 | 패키지 |
+|----|----------|--------|
+| macOS | Apple Silicon (`arm64`) | `taja-cli-macos-arm64.tar.gz` |
+| macOS | Intel (`x64`) | `taja-cli-macos-x64.tar.gz` |
+| Linux | `x64` | `taja-cli-linux-x64.tar.gz` |
+| Windows | `x64` | `taja-cli-windows-x64.zip` |
+
+#### 업데이트 / 삭제
+
+```bash
+# 최신 버전으로 업데이트
+npm install -g taja-cli@latest
+
+# 제거
+npm uninstall -g taja-cli
+```
+
+> npm 패키지는 네이티브 바이너리 래퍼입니다. `taja` 실행 시 바이너리가 없으면 Release 에셋을 자동으로 내려받습니다.
+
+### 2. Cargo로 빌드 및 실행 (소스)
+
+개발·기여할 때 사용합니다.
+
+```bash
+git clone https://github.com/parkjangwon/taja-cli.git
+cd taja-cli
+cargo run --release
+```
+
+빌드 결과물만 설치하려면:
+
+```bash
+cargo install --path .
+# 이후: taja-cli  (Cargo 바이너리 이름)
+```
 
 > [!IMPORTANT]
 > 타자 연습을 시작하기 전에 **OS 입력기 상태를 반드시 '영문(QWERTY)'**으로 전환해 주세요. (내장 한글 오토마타 엔진이 키 입력을 자모로 변환하여 작동합니다.)

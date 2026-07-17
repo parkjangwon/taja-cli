@@ -488,32 +488,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                         app.input_automata.backspace();
                                     }
                                     KeyCode::Char(' ') | KeyCode::Enter => {
-                                        app.input_automata.commit_current();
-                                        let typed = app.input_automata.get_text();
-                                        let expected = app.target_text.clone();
-                                        if typed.trim() != expected.trim() {
-                                            // 틀린 경우 콤보 리셋
-                                            app.game_mode_combo = 0;
-                                            app.game_words_total += 1;
-                                        } else {
-                                            app.time_attack_next_word();
-                                        }
-                                        // 새 단어로 입력 리셋 (틀린 경우도)
-                                        if typed.trim() != expected.trim() {
-                                            app.input_automata.clear();
-                                        }
+                                        let success = app.is_current_word_success();
+                                        app.time_attack_next_word(success);
                                     }
                                     KeyCode::Char(c) => {
-                                        let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
-                                        app.input_automata.push_char(c, expected_char);
-                                        if let Some(ec) = expected_char {
-                                            let typed_text = app.input_automata.get_text();
-                                            let pos = typed_text.chars().count().saturating_sub(1);
-                                            if let Some(tc) = typed_text.chars().nth(pos) {
-                                                if !hangeul::is_typing_valid(tc, ec) {
-                                                    app.record_error(ec, c);
-                                                }
-                                            }
+                                        app.push_game_char(c);
+                                        // 정확히 입력 완료 시 자동으로 다음 단어
+                                        if app.is_target_fully_typed() {
+                                            let success = app.is_current_word_success();
+                                            app.time_attack_next_word(success);
                                         }
                                     }
                                     _ => {}
@@ -532,10 +515,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                     app.input_automata.backspace();
                                 }
                                 KeyCode::Char(' ') | KeyCode::Enter => {
-                                    app.input_automata.commit_current();
-                                    let typed = app.input_automata.get_text();
-                                    let expected = app.target_text.clone();
-                                    let had_error = typed.trim() != expected.trim();
+                                    let had_error = !app.is_current_word_success();
                                     let has_next = app.survival_next_word(had_error);
                                     if !has_next {
                                         app.update_elapsed_time();
@@ -544,15 +524,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
-                                    app.input_automata.push_char(c, expected_char);
-                                    if let Some(ec) = expected_char {
-                                        let typed_text = app.input_automata.get_text();
-                                        let pos = typed_text.chars().count().saturating_sub(1);
-                                        if let Some(tc) = typed_text.chars().nth(pos) {
-                                            if !hangeul::is_typing_valid(tc, ec) {
-                                                app.record_error(ec, c);
-                                            }
+                                    app.push_game_char(c);
+                                    // 정확히 입력 완료 시 자동 제출 (오타 없이 맞춘 경우만 성공)
+                                    if app.is_target_fully_typed() {
+                                        let had_error = !app.is_current_word_success();
+                                        let has_next = app.survival_next_word(had_error);
+                                        if !has_next {
+                                            app.update_elapsed_time();
+                                            app.save_session_record("게임-서바이벌", if is_korean { "한글" } else { "영어" });
+                                            app.active_screen = ActiveScreen::GameOver { game_type: GameType::Survival, is_korean };
                                         }
                                     }
                                 }
@@ -573,31 +553,37 @@ fn run_app<B: ratatui::backend::Backend>(
                                         app.menu_selected_idx = 2;
                                     }
                                     KeyCode::Backspace => {
-                                        if let Some(active_idx) = app.rain_active_idx {
-                                            if app.rain_words[active_idx].typed_len > 0 {
-                                                app.rain_words[active_idx].typed_len -= 1;
-                                            }
+                                        if app.rain_active_idx.is_some() {
                                             app.input_automata.backspace();
+                                            app.update_rain_typed_progress();
+                                            // 입력이 비면 타겟 선택 해제
+                                            if app.input_automata.get_text().is_empty() {
+                                                if let Some(idx) = app.rain_active_idx {
+                                                    app.rain_words[idx].active = false;
+                                                    app.rain_words[idx].typed_len = 0;
+                                                }
+                                                app.rain_active_idx = None;
+                                                app.target_text.clear();
+                                            }
                                         }
                                     }
                                     KeyCode::Char(c) => {
-                                        // 활성 단어가 없으면 첫 글자가 매칭되는 단어 찾기
+                                        // 활성 단어가 없으면 첫 자모가 매칭되는 단어 찾기
                                         if app.rain_active_idx.is_none() {
-                                            // 첫 글자 매칭으로 활성화
                                             let mut found_idx = None;
                                             for (i, word) in app.rain_words.iter().enumerate() {
-                                                if word.destroyed || word.typed_len > 0 {
+                                                if word.destroyed {
                                                     continue;
                                                 }
                                                 let first_char = word.text.chars().next();
                                                 if let Some(fc) = first_char {
-                                                    // 한글 입력인 경우 자모 변환으로 비교
                                                     let input_jamo = hangeul::map_qwerty_to_jamo(c);
                                                     let target_jamos = hangeul::fully_decompose_hangul(fc);
                                                     let matches = if let Some(ij) = input_jamo {
                                                         target_jamos.first() == Some(&ij)
                                                     } else {
-                                                        fc == c
+                                                        // 영문: 대소문자 무시 비교
+                                                        fc.eq_ignore_ascii_case(&c)
                                                     };
                                                     if matches {
                                                         found_idx = Some(i);
@@ -609,41 +595,33 @@ fn run_app<B: ratatui::backend::Backend>(
                                                 app.rain_active_idx = Some(idx);
                                                 app.rain_words[idx].active = true;
                                                 app.input_automata.clear();
-                                                // 타깃 설정
                                                 let word_text = app.rain_words[idx].text.clone();
                                                 app.target_text = word_text;
                                                 app.update_automata_modes();
-                                                let expected_char = app.target_text.chars().next();
-                                                app.input_automata.push_char(c, expected_char);
-                                                // 완성 자 비교
-                                                let typed = app.input_automata.get_text();
-                                                let typed_len = hangeul::count_completed_chars(&typed, &app.target_text);
-                                                app.rain_words[idx].typed_len = typed_len;
+                                                app.push_game_char(c);
+                                                app.update_rain_typed_progress();
                                             }
                                         } else {
-                                            // 활성 단어에 계속 입력
-                                            let idx = app.rain_active_idx.unwrap();
-                                            let expected_pos = app.input_automata.get_text().chars().count();
-                                            let expected_char = app.target_text.chars().nth(expected_pos);
-                                            app.input_automata.push_char(c, expected_char);
-                                            let typed = app.input_automata.get_text();
-                                            let typed_len = hangeul::count_completed_chars(&typed, &app.target_text);
-                                            app.rain_words[idx].typed_len = typed_len;
+                                            app.push_game_char(c);
+                                            app.update_rain_typed_progress();
 
-                                            // 단어 완성 체크
-                                            let target_len = app.target_text.chars().count();
-                                            if typed_len >= target_len {
+                                            // 정확히 입력했을 때만 파괴 (오타 통과 방지)
+                                            if app.is_rain_word_complete() {
+                                                let idx = app.rain_active_idx.unwrap();
                                                 app.rain_words[idx].destroyed = true;
                                                 app.rain_words[idx].active = false;
                                                 app.rain_active_idx = None;
                                                 app.game_mode_score += 10;
                                                 app.game_words_correct += 1;
+                                                app.game_words_total += 1;
                                                 app.game_mode_round += 1;
                                                 app.game_mode_combo += 1;
                                                 if app.game_mode_combo > app.game_mode_max_combo {
                                                     app.game_mode_max_combo = app.game_mode_combo;
                                                 }
+                                                app.accumulated_strokes += app.input_automata.get_strokes();
                                                 app.input_automata.clear();
+                                                app.target_text.clear();
                                             }
                                         }
                                     }
@@ -672,6 +650,10 @@ fn run_app<B: ratatui::backend::Backend>(
                                         // 정답 제출
                                         app.flash_submit_answer();
                                     }
+                                    // 표시 중 Enter: 즉시 숨기고 입력 단계로 (조기 진행 허용)
+                                    else {
+                                        app.flash_visible = false;
+                                    }
                                 }
                                 KeyCode::Backspace => {
                                     if !app.flash_answer_shown && !app.flash_visible {
@@ -679,9 +661,12 @@ fn run_app<B: ratatui::backend::Backend>(
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    if !app.flash_answer_shown && !app.flash_visible {
-                                        let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
-                                        app.input_automata.push_char(c, expected_char);
+                                    if !app.flash_answer_shown {
+                                        // 표시 중에도 입력 시작 가능 (동시에 단어 숨김)
+                                        if app.flash_visible {
+                                            app.flash_visible = false;
+                                        }
+                                        app.push_game_char(c);
                                     }
                                 }
                                 _ => {}
@@ -708,15 +693,14 @@ fn run_app<B: ratatui::backend::Backend>(
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
-                                    app.input_automata.push_char(c, expected_char);
-                                    if let Some(ec) = expected_char {
-                                        let typed_text = app.input_automata.get_text();
-                                        let pos = typed_text.chars().count().saturating_sub(1);
-                                        if let Some(tc) = typed_text.chars().nth(pos) {
-                                            if !hangeul::is_typing_valid(tc, ec) {
-                                                app.record_error(ec, c);
-                                            }
+                                    app.push_game_char(c);
+                                    if app.is_target_fully_typed() {
+                                        app.input_automata.commit_current();
+                                        let has_next = app.daily_next_word();
+                                        if !has_next {
+                                            app.update_elapsed_time();
+                                            app.save_session_record("게임-데일리챌린지", if is_korean { "한글" } else { "영어" });
+                                            app.active_screen = ActiveScreen::GameOver { game_type: GameType::DailyChallenge, is_korean };
                                         }
                                     }
                                 }
@@ -771,15 +755,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                     }
                                 }
                                 KeyCode::Char(c) => {
-                                    let expected_char = app.target_text.chars().nth(app.input_automata.get_text().chars().count());
-                                    app.input_automata.push_char(c, expected_char);
-                                    if let Some(ec) = expected_char {
-                                        let typed_text = app.input_automata.get_text();
-                                        let pos = typed_text.chars().count().saturating_sub(1);
-                                        if let Some(tc) = typed_text.chars().nth(pos) {
-                                            if !hangeul::is_typing_valid(tc, ec) {
-                                                app.record_error(ec, c);
-                                            }
+                                    app.push_game_char(c);
+                                    // 현재 문단을 정확히 다 치면 Enter 없이 다음 문단으로
+                                    if app.is_target_fully_typed() {
+                                        app.input_automata.commit_current();
+                                        let has_next = app.long_text_next_paragraph();
+                                        if !has_next {
+                                            app.update_elapsed_time();
+                                            app.save_session_record("게임-긴글레이스", if is_korean { "한글" } else { "영어" });
+                                            app.active_screen = ActiveScreen::GameOver { game_type: GameType::LongTextRace, is_korean };
                                         }
                                     }
                                 }
@@ -866,10 +850,7 @@ fn run_app<B: ratatui::backend::Backend>(
                 app.check_flash_visibility();
             }
             ActiveScreen::LongTextRace { .. } => {
-                let current_secs = app.elapsed_time.as_secs() as usize;
-                if current_secs > app.long_text_cpm_history.len() {
-                    app.record_cpm_history();
-                }
+                app.record_cpm_history();
             }
             _ => {}
         }

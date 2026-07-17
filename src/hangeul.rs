@@ -190,6 +190,17 @@ impl HangulAutomata {
         self.current.to_char()
     }
 
+    /// 다음에 대조해야 할 목표 글자의 인덱스.
+    /// 조합 중이면 현재 조합 글자 위치, 아니면 다음에 새로 입력할 위치.
+    pub fn expected_char_index(&self) -> usize {
+        let n = self.get_text().chars().count();
+        if self.current != HangulState::Empty {
+            n.saturating_sub(1)
+        } else {
+            n
+        }
+    }
+
     /// 현재 누적 타수 반환
     pub fn get_strokes(&self) -> usize {
         self.strokes
@@ -497,8 +508,62 @@ pub fn is_typing_valid(typed_char: char, expected_char: char) -> bool {
     true
 }
 
+/// 문자열 전체를 자모 시퀀스로 완전 분해
+pub fn fully_decompose_str(s: &str) -> Vec<char> {
+    s.chars().flat_map(fully_decompose_hangul).collect()
+}
+
+/// 입력 전체의 자모 시퀀스가 목표 전체 자모 시퀀스의 접두사인지 검사.
+/// 한글 다음 음절 초성이 앞 글자 종성으로 붙는 중간 상태(예: "하늘" 입력 중 "한")도 올바르게 허용한다.
+pub fn is_input_prefix_of(typed: &str, expected: &str) -> bool {
+    let typed_jamos = fully_decompose_str(typed);
+    let expected_jamos = fully_decompose_str(expected);
+    if typed_jamos.len() > expected_jamos.len() {
+        return false;
+    }
+    typed_jamos.iter().zip(expected_jamos.iter()).all(|(t, e)| t == e)
+}
+
+/// 목표 문자열과 입력이 자모 단위로 완전히 일치하는지 (게임 모드 완료 판정용)
+pub fn is_input_exact_match(typed: &str, expected: &str) -> bool {
+    fully_decompose_str(typed) == fully_decompose_str(expected)
+}
+
+/// 입력이 목표의 올바른 자모 접두사일 때, 자모가 완전히 채워진 목표 글자 수.
+/// 타자 레인 진행 표시 등에서 사용. 잘못된 입력이면 정확히 일치하는 선행 글자 수만 반환.
+pub fn fully_matched_chars(typed: &str, expected: &str) -> usize {
+    if typed.is_empty() {
+        return 0;
+    }
+
+    if is_input_prefix_of(typed, expected) {
+        let typed_jamos = fully_decompose_str(typed);
+        let mut consumed = 0usize;
+        let mut count = 0usize;
+        for ec in expected.chars() {
+            let ej = fully_decompose_hangul(ec);
+            if consumed + ej.len() <= typed_jamos.len() {
+                consumed += ej.len();
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        return count;
+    }
+
+    typed
+        .chars()
+        .zip(expected.chars())
+        .take_while(|(t, e)| t == e)
+        .count()
+}
+
 /// 입력 텍스트와 목표 텍스트를 대조하여 실제로 완료(또는 완료형 오타)된 글자 수를 카운트.
 /// 조합 중인 마지막 미완성 자모(예: 'ㄲ'을 치고 아직 'ㅣ'를 안 친 상태)는 글자 수에서 제외하여 조기 종료 방지.
+///
+/// 주의: 오타가 있어도 글자 칸을 채운 것으로 세므로, **성공/파괴 판정에는 쓰지 말 것**.
+/// 자리/낱말 연습의 진행·조기 종료 방지용이다. 게임 완료 판정은 `is_input_exact_match`를 사용한다.
 pub fn count_completed_chars(typed: &str, expected: &str) -> usize {
     let typed_chars: Vec<char> = typed.chars().collect();
     let expected_chars: Vec<char> = expected.chars().collect();
@@ -645,5 +710,56 @@ mod tests {
         // 일반 영문
         assert!(is_typing_valid('a', 'a'));
         assert!(!is_typing_valid('a', 'b'));
+    }
+
+    #[test]
+    fn test_input_prefix_multi_syllable() {
+        // "하늘" 입력 중 다음 음절 초성이 종성으로 붙는 중간 상태
+        assert!(is_input_prefix_of("", "하늘"));
+        assert!(is_input_prefix_of("ㅎ", "하늘"));
+        assert!(is_input_prefix_of("하", "하늘"));
+        assert!(is_input_prefix_of("한", "하늘")); // 하 + ㄴ(늘의 초성)
+        assert!(is_input_prefix_of("하느", "하늘"));
+        assert!(is_input_prefix_of("하늘", "하늘"));
+        assert!(!is_input_prefix_of("해", "하늘"));
+        assert!(!is_input_prefix_of("하능", "하늘"));
+        assert!(!is_input_prefix_of("하늘다", "하늘"));
+
+        assert!(is_input_exact_match("하늘", "하늘"));
+        assert!(!is_input_exact_match("한", "하늘"));
+        assert!(!is_input_exact_match("하눌", "하늘"));
+
+        // 영문
+        assert!(is_input_prefix_of("app", "apple"));
+        assert!(is_input_exact_match("apple", "apple"));
+        assert!(!is_input_exact_match("apply", "apple"));
+    }
+
+    #[test]
+    fn test_fully_matched_chars() {
+        assert_eq!(fully_matched_chars("", "하늘"), 0);
+        assert_eq!(fully_matched_chars("ㅎ", "하늘"), 0);
+        assert_eq!(fully_matched_chars("하", "하늘"), 1);
+        assert_eq!(fully_matched_chars("한", "하늘"), 1); // 늘 조합 시작
+        assert_eq!(fully_matched_chars("하느", "하늘"), 1);
+        assert_eq!(fully_matched_chars("하늘", "하늘"), 2);
+        assert_eq!(fully_matched_chars("app", "apple"), 3);
+        assert_eq!(fully_matched_chars("apx", "apple"), 2);
+    }
+
+    #[test]
+    fn test_expected_char_index_while_composing() {
+        let mut automata = HangulAutomata::new();
+        assert_eq!(automata.expected_char_index(), 0);
+        automata.push_char('g', None); // ㅎ
+        assert_eq!(automata.expected_char_index(), 0);
+        automata.push_char('k', None); // 하
+        assert_eq!(automata.expected_char_index(), 0);
+        automata.push_char('s', None); // 한
+        assert_eq!(automata.expected_char_index(), 0);
+        automata.push_char('r', None); // 한ㄱ — 종성 이동 후 다음 글자 조합
+        // "한" 확정 + "ㄱ" 조합 → index 1
+        assert_eq!(automata.get_text().chars().count(), 2);
+        assert_eq!(automata.expected_char_index(), 1);
     }
 }

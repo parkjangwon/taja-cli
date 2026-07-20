@@ -6,7 +6,7 @@ const { spawn } = require('child_process');
 const https = require('https');
 
 // 버전 정보 (Github Releases 태그와 매핑)
-const VERSION = '0.1.1';
+const VERSION = '0.2.0';
 const REPO = 'parkjangwon/taja-cli';
 
 // 플랫폼 매핑

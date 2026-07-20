@@ -139,7 +139,7 @@ fn draw_header(f: &mut Frame, area: Rect) {
     );
 
     let info = Span::styled(
-        " v0.1.1 ",
+        format!(" v{} ", env!("CARGO_PKG_VERSION")),
         Style::default().fg(Color::DarkGray),
     );
 
